@@ -10,12 +10,40 @@ out/
 *.sln
 *.vcxproj*
 
-# Generated
+# Compiled Object files
+*.slo
+*.lo
+*.o
 *.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
 *.lib
+
+# Generated
 *.pdb
 *.ilk
 *.exp
+*.mod
+*.smod
+
+# Executables
+*.exe
+*.app
+
+# Prerequisites
+*.d
 
 # vcpkg (local, not needed)
 vcpkg/
