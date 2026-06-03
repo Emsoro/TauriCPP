@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TauriCPP Demo</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="header">
+        <h1>TauriCPP</h1>
+        <p>C++ + WebView2 Desktop Framework</p>
+    </div>
+
+    <!-- JS -> C++ 调用测试 -->
+    <div class="card">
+        <h2>JS -> C++ Invoke</h2>
+        <div class="input-group">
+            <input type="text" id="nameInput" placeholder="Enter your name..." value="World">
+            <button onclick="callGreet()">Greet</button>
+        </div>
+        <div class="input-group">
+            <input type="number" id="aInput" placeholder="a" value="42">
+            <input type="number" id="bInput" placeholder="b" value="58">
+            <button onclick="callAdd()">Add</button>
+        </div>
+        <div class="input-group">
+            <input type="text" id="echoInput" placeholder="Echo message..." value="Hello from frontend!">
+            <button onclick="callEcho()">Echo</button>
+        </div>
+        <div class="result-box" id="invokeResult">Results will appear here...</div>
+    </div>
+
+    <!-- C++ -> JS 事件测试 -->
+    <div class="card">
+        <h2>C++ -> JS Event</h2>
+        <p style="margin-bottom:12px;color:#888">Events emitted from C++ backend will appear here in real-time.</p>
+        <div class="result-box event-log" id="eventLog">Waiting for events...</div>
+    </div>
+
+    <!-- 系统信息 -->
+    <div class="card">
+        <h2>System Info</h2>
+        <button onclick="getSystemInfo()">Get System Info</button>
+        <div class="result-box" id="sysInfo">Click button to fetch...</div>
+    </div>
+
+    <div class="status-bar">
+        <span class="status-dot"></span>
+        TauriCPP Framework - VirtualFS Memory Loading - No Temp Files
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

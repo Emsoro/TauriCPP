@@ -1,0 +1,30 @@
+# Build
+build/
+out/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+
+# Generated
+*.obj
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# vcpkg (local, not needed)
+vcpkg/
+vcpkg_installed/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+Desktop.ini

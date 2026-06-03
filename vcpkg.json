@@ -1,0 +1,7 @@
+{
+    "name": "tauricpp",
+    "version-string": "0.1.0",
+    "dependencies": [
+        "webview2"
+    ]
+}
