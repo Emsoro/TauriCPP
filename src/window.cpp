@@ -5,10 +5,35 @@
 #include <WebView2.h>
 #include <wrl.h>
 #include <shlwapi.h>
+#include <shellscalingapi.h>
 
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "shcore.lib")   // 用于 GetDpiForMonitor / SetProcessDpiAwarenessContext
 
 using namespace Microsoft::WRL;
+
+// ============================================================================
+// DPI 辅助：Per-Monitor V2 感知（运行时兜底，即便 manifest 缺失也能正常渲染）
+// ============================================================================
+static void EnsurePerMonitorDpiAwareV2() {
+    // 优先使用 Win10+ 的 PerMonitorV2：系统自动缩放非客户区 + 子窗口 DPI 通知
+    typedef BOOL(WINAPI* PSetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+    auto setContext = reinterpret_cast<PSetProcessDpiAwarenessContext>(
+        ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+    if (setContext) {
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        if (setContext(reinterpret_cast<DPI_AWARENESS_CONTEXT>(-4))) {
+            return;
+        }
+    }
+    // Win8.1 兜底：PROCESS_PER_MONITOR_DPI_AWARE = 2
+    typedef HRESULT(WINAPI* PSetProcessDpiAwareness)(PROCESS_DPI_AWARENESS);
+    auto setAwareness = reinterpret_cast<PSetProcessDpiAwareness>(
+        ::GetProcAddress(::GetModuleHandleW(L"shcore.dll"), "SetProcessDpiAwareness"));
+    if (setAwareness) {
+        setAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    }
+}
 
 namespace tauricpp {
 
@@ -81,6 +106,8 @@ static std::string WideToUtf8(const std::wstring& str) {
 // 创建Win32原生窗口
 // ============================================================================
 bool Window::CreateNativeWindow() {
+    EnsurePerMonitorDpiAwareV2();
+
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -102,8 +129,35 @@ bool Window::CreateNativeWindow() {
         style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     }
 
-    RECT rect = { 0, 0, config_.width, config_.height };
-    AdjustWindowRect(&rect, style, FALSE);
+    // 根据窗口目标显示位置的 DPI 将"设计尺寸"换算为实际物理像素尺寸
+    // 设计尺寸约定：以 96 DPI (100%) 为基准（即 CSS 逻辑像素）
+    UINT targetDpi = 96;
+    {
+        // 创建一个隐藏临时窗口以获得准确的 WMDPICHANGED 前的屏幕DPI；
+        // 更简单：直接用主显示器的 DPI，窗口创建后系统会再次发送 WM_DPICHANGED。
+        typedef UINT(WINAPI* PGetDpiForSystem)();
+        auto getDpiForSystem = reinterpret_cast<PGetDpiForSystem>(
+            ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetDpiForSystem"));
+        if (getDpiForSystem) {
+            targetDpi = getDpiForSystem();
+        }
+    }
+    const int baseDpi = 96;
+    int scaledWidth = MulDiv(config_.width, targetDpi, baseDpi);
+    int scaledHeight = MulDiv(config_.height, targetDpi, baseDpi);
+
+    RECT rect = { 0, 0, scaledWidth, scaledHeight };
+    // 注意：AdjustWindowRect 非 DPI 感知，使用 DPI 感知版本（Win10 1607+），
+    // 若不可用则退回 AdjustWindowRect，DPI 差异由 WM_DPICHANGED 补偿。
+    typedef BOOL(WINAPI* PAdjustWindowRectExForDpi)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    auto adjustForDpi = reinterpret_cast<PAdjustWindowRectExForDpi>(
+        ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
+    DWORD exStyle = config_.always_on_top ? WS_EX_TOPMOST : 0;
+    if (adjustForDpi) {
+        adjustForDpi(&rect, style, FALSE, exStyle, targetDpi);
+    } else {
+        AdjustWindowRectEx(&rect, style, FALSE, exStyle);
+    }
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
     if (config_.center) {
@@ -115,7 +169,7 @@ bool Window::CreateNativeWindow() {
 
     // 关键：创建时不显示窗口（不传WS_VISIBLE），等WebView2导航完成后再显示
     hwnd_ = CreateWindowExW(
-        config_.always_on_top ? WS_EX_TOPMOST : 0,
+        exStyle,
         wc.lpszClassName,
         Utf8ToWide(config_.title).c_str(),
         style, x, y,
@@ -159,6 +213,29 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (wParam == SIZE_MAXIMIZED && self->on_maximize_) {
                 self->on_maximize_();
             }
+        }
+        return 0;
+    }
+
+    case WM_DPICHANGED: {
+        // DPI 变化（拖到不同缩放比例的屏幕）：重新调整窗口尺寸 + WebView2 bounds
+        // 确保 WebView2 始终以物理像素渲染，避免位图拉伸导致模糊
+        if (self) {
+            UINT newDpi = LOWORD(wParam);
+            RECT* suggested = reinterpret_cast<RECT*>(lParam);
+            if (suggested) {
+                SetWindowPos(hwnd, nullptr,
+                    suggested->left, suggested->top,
+                    suggested->right - suggested->left,
+                    suggested->bottom - suggested->top,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            if (self->controller_) {
+                RECT bounds;
+                GetClientRect(hwnd, &bounds);
+                self->controller_->put_Bounds(bounds);
+            }
+            (void)newDpi;
         }
         return 0;
     }

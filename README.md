@@ -13,6 +13,7 @@ A lightweight C++ desktop application framework powered by WebView2, inspired by
 - **Clipboard API** — Read/write system clipboard via `tauricpp::Clipboard`.
 - **DevTools Toggle** — Press F12 to open/close DevTools when `config.devtools = true`.
 - **SPA Fallback** — Non-asset routes automatically serve `/index.html` for single-page applications.
+- **Per-Monitor DPI Awareness (Per-Monitor V2)** — Manifest-declared Per-Monitor V2 DPI awareness, combined with runtime `SetProcessDpiAwarenessContext` fallback and `WM_DPICHANGED` handling. The window and WebView2 are always rendered at physical pixel resolution — no bitmap-stretch blur on 125%/150%/200% scaled displays.
 - **Dark Launch** — Window background color matches frontend theme, eliminating white flash on startup.
 - **Dev/Prod Dual Mode** — Automatically loads from filesystem in development, from embedded resources in production. No code changes required.
 - **Minimal Dependencies** — Only WebView2 SDK and nlohmann/json. No Chromium bundled, no .NET runtime, no Qt.
@@ -380,6 +381,10 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## Changelog
+
+### v0.2.1
+
+- **Fix**: Rendering on high-DPI (125% / 150% / 200%) displays was blurry compared to the Edge browser. The application now declares Per-Monitor V2 DPI awareness via the embedded manifest (fallback `SetProcessDpiAwarenessContext` at runtime), scales window geometry using physical pixels via `MulDiv` + DPI-aware `AdjustWindowRectExForDpi`, and handles `WM_DPICHANGED` to relayout `WebView2::put_Bounds` when the window is dragged across monitors with different scaling.
 
 ### v0.2.0
 

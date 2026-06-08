@@ -13,6 +13,7 @@
 - **剪贴板 API** — 通过 `tauricpp::Clipboard` 读写系统剪贴板。
 - **DevTools 切换** — 设置 `config.devtools = true` 后按 F12 打开/关闭开发者工具。
 - **SPA 路由回退** — 非静态资源路径自动返回 `/index.html`，支持前端路由。
+- **Per-Monitor 高 DPI 感知（Per-Monitor V2）** — 通过嵌入 manifest 声明 Per-Monitor V2 DPI 感知，运行时 `SetProcessDpiAwarenessContext` 兜底，并处理 `WM_DPICHANGED` 事件。窗口与 WebView2 始终按物理像素渲染，在 125%/150%/200% 等缩放比例的屏幕上不会再因位图拉伸而模糊。
 - **深色启动** — 窗口背景色匹配前端主题，启动时无白屏闪烁。
 - **开发/生产双模式** — 开发时自动从文件系统加载，生产时从嵌入资源加载，无需修改代码。
 - **极简依赖** — 仅需 WebView2 SDK 和 nlohmann/json，不捆绑 Chromium，不依赖 .NET 运行时，不依赖 Qt。
@@ -380,6 +381,10 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## 更新日志
+
+### v0.2.1
+
+- **修复**：在 125%/150%/200% 缩放比例的高 DPI 屏幕上，WebView2 渲染的网页比 Edge 浏览器模糊。现通过嵌入 manifest 声明 Per-Monitor V2 DPI 感知，并以运行时 `SetProcessDpiAwarenessContext` 兜底；窗口几何尺寸按物理像素（`MulDiv` + DPI 感知 `AdjustWindowRectExForDpi`）计算；`WM_DPICHANGED` 处理确保跨显示器拖拽时 WebView2 按物理像素重新布局。
 
 ### v0.2.0
 
