@@ -14,10 +14,17 @@ public:
 
     struct Config {
         Window::Config window_config;
+        bool dev_mode = false;  ///< 开发模式标志，可用于条件逻辑
     };
 
     explicit App(const Config& config = {});
     ~App();
+
+    // 禁止拷贝和移动
+    App(const App&) = delete;
+    App& operator=(const App&) = delete;
+    App(App&&) = delete;
+    App& operator=(App&&) = delete;
 
     /// 设置初始化回调（在窗口创建前调用，用于注册命令等）
     void OnSetup(SetupCallback cb);

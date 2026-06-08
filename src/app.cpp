@@ -27,7 +27,13 @@ App::App(const Config& config)
             WCHAR absPath[MAX_PATH];
             if (GetFullPathNameW(cand.c_str(), MAX_PATH, absPath, nullptr)) {
                 if (GetFileAttributesW(absPath) != INVALID_FILE_ATTRIBUTES) {
-                    std::string dirPath(absPath, absPath + wcslen(absPath));
+                    // ★ 修复：使用WideCharToMultiByte正确转换路径，避免非ASCII路径问题
+                    int mbLen = WideCharToMultiByte(CP_UTF8, 0, absPath, -1, nullptr, 0, nullptr, nullptr);
+                    std::string dirPath;
+                    if (mbLen > 0) {
+                        dirPath.resize(mbLen - 1);
+                        WideCharToMultiByte(CP_UTF8, 0, absPath, -1, dirPath.data(), mbLen, nullptr, nullptr);
+                    }
                     vfs_.LoadFromDirectory(dirPath);
                     break;
                 }

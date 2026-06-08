@@ -13,18 +13,30 @@ void Bridge::RegisterCommand(const std::string& cmd, InvokeHandler handler) {
     commands_[cmd] = std::move(handler);
 }
 
-std::string Bridge::HandleInvoke(const std::string& cmd, const std::string& args_json) {
+void Bridge::UnregisterCommand(const std::string& cmd) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = commands_.find(cmd);
-    if (it == commands_.end()) {
-        nlohmann::json result;
-        result["error"] = "Unknown command: " + cmd;
-        return result.dump();
+    commands_.erase(cmd);
+}
+
+std::string Bridge::HandleInvoke(const std::string& cmd, const std::string& args_json) {
+    // ★ 修复：先在锁内查找handler，再在锁外调用
+    // 之前整个函数持有mutex_调用handler，如果handler调用Emit会死锁
+    InvokeHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = commands_.find(cmd);
+        if (it == commands_.end()) {
+            nlohmann::json result;
+            result["error"] = "Unknown command: " + cmd;
+            return result.dump();
+        }
+        handler = it->second;
     }
+    // handler在锁外执行，避免死锁
 
     try {
         nlohmann::json args = nlohmann::json::parse(args_json);
-        nlohmann::json result = it->second(args);
+        nlohmann::json result = handler(args);
         return result.dump();
     } catch (const std::exception& e) {
         nlohmann::json result;
@@ -34,10 +46,24 @@ std::string Bridge::HandleInvoke(const std::string& cmd, const std::string& args
 }
 
 void Bridge::Emit(const std::string& event, const nlohmann::json& data) {
-    std::string js = "__tauricpp_internal_onEvent('" + event + "', " + data.dump() + ");";
-    if (execute_js_) {
-        execute_js_(js);
+    // ★ 修复：用atomic风格的读取（execute_js_只设置一次后不变）
+    // 先拷贝到局部变量，避免竞态
+    ExecuteJsCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cb = execute_js_;
     }
+
+    if (!cb) return;
+
+    // ★ 修复XSS：使用JSON.stringify构造安全的JS调用，而非字符串拼接
+    // 将event名称也用JSON编码，防止注入单引号等特殊字符
+    nlohmann::json callArgs;
+    callArgs["event"] = event;
+    callArgs["data"] = data;
+    std::string js = "__tauricpp_internal_emit(" + callArgs.dump() + ");";
+
+    cb(js);
 }
 
 void Bridge::SetExecuteJsCallback(ExecuteJsCallback cb) {
@@ -71,6 +97,10 @@ std::string Bridge::GetBridgeJs() {
                 this._listeners[event] = [];
             }
             this._listeners[event].push(callback);
+            // 返回取消监听函数
+            return function() {
+                __tauricpp__._listeners[event] = __tauricpp__._listeners[event].filter(cb => cb !== callback);
+            };
         },
 
         removeListener: function(event, callback) {
@@ -80,10 +110,24 @@ std::string Bridge::GetBridgeJs() {
         }
     };
 
-    window.__tauricpp_internal_onEvent = function(event, data) {
+    // ★ 安全的事件分发：从JSON对象中读取event和data，不使用字符串拼接
+    window.__tauricpp_internal_emit = function(payload) {
+        var event = payload.event;
+        var data = payload.data;
         if (__tauricpp__._listeners[event]) {
-            __tauricpp__._listeners[event].forEach(cb => cb(data));
+            __tauricpp__._listeners[event].forEach(function(cb) {
+                try {
+                    cb(data);
+                } catch(e) {
+                    console.error('[TauriCPP] Event listener error for "' + event + '":', e);
+                }
+            });
         }
+    };
+
+    // 兼容旧版：直接传event字符串+data的调用方式（从C++ Emit升级后的安全版本）
+    window.__tauricpp_internal_onEvent = function(event, data) {
+        __tauricpp_internal_emit({event: event, data: data});
     };
 
     window.chrome.webview.addEventListener('message', function(e) {
@@ -100,7 +144,9 @@ std::string Bridge::GetBridgeJs() {
                     delete __tauricpp__._invokeCallbacks[msg.id];
                 }
             }
-        } catch(ex) {}
+        } catch(ex) {
+            console.error('[TauriCPP] Message processing error:', ex);
+        }
     });
 
     window.__tauricpp__ = __tauricpp__;

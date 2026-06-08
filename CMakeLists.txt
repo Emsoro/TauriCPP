@@ -65,6 +65,8 @@ message(STATUS "WebView2 dll: ${WEBVIEW2_DLL}")
 add_library(tauricpp STATIC
     src/app.cpp
     src/bridge.cpp
+    src/clipboard.cpp
+    src/dialog.cpp
     src/embedded_dll.cpp
     src/virtual_fs.cpp
     src/window.cpp
@@ -78,6 +80,9 @@ target_include_directories(tauricpp PUBLIC
 
 target_link_libraries(tauricpp PUBLIC
     shlwapi
+    shell32
+    comdlg32
+    ole32
     ${WEBVIEW2_LIBRARY}
 )
 
@@ -94,11 +99,13 @@ set(RESOURCE_MAP_CPP "${GEN_DIR}/resource_map.cpp")
 find_package(Python3 COMPONENTS Interpreter)
 
 if(Python3_Interpreter_FOUND)
+    # ★ 修复：收集前端文件列表作为依赖，文件变化时自动重新打包
+    file(GLOB_RECURSE FRONTEND_FILES "${FRONTEND_DIR}/*")
     add_custom_command(
         OUTPUT "${RESOURCES_RC}" "${RESOURCE_MAP_CPP}"
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/pack_resources.py"
                 "${FRONTEND_DIR}" -o "${RESOURCES_RC}" -t "TAURI_RES"
-        DEPENDS "${CMAKE_SOURCE_DIR}/tools/pack_resources.py"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tools/pack_resources.py" ${FRONTEND_FILES}
         COMMENT "Packing frontend resources into .rc file"
         VERBATIM
     )

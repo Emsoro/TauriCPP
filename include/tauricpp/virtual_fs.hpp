@@ -19,13 +19,23 @@ public:
 
     static VirtualFS& Instance();
 
+    // 禁止拷贝和移动
+    VirtualFS(const VirtualFS&) = delete;
+    VirtualFS& operator=(const VirtualFS&) = delete;
+
     /// 注册一个虚拟文件
     void RegisterFile(const std::string& path, const std::vector<uint8_t>& data, const std::string& mime_type);
 
     /// 注册一个虚拟文件（字符串版本）
     void RegisterFile(const std::string& path, const std::string& content, const std::string& mime_type);
 
-    /// 查找虚拟文件
+    /// 注册一个虚拟文件（右值引用版本，避免大文件拷贝）
+    void RegisterFile(const std::string& path, std::vector<uint8_t>&& data, const std::string& mime_type);
+
+    /// 查找虚拟文件（返回指针，不拷贝数据；返回nullptr表示未找到）
+    const VFile* FindFile(const std::string& path) const;
+
+    /// 查找虚拟文件（拷贝到out，兼容旧接口）
     bool FindFile(const std::string& path, VFile& out) const;
 
     /// 从exe资源段加载所有前端资源

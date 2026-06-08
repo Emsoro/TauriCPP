@@ -20,6 +20,7 @@ struct Window::EventTokens::Impl {
     EventRegistrationToken webMessageReceivedToken = {};
     EventRegistrationToken navigationCompletedToken = {};
     EventRegistrationToken sourceChangedToken = {};
+    EventRegistrationToken focusChangedToken = {};
 };
 
 Window::EventTokens::EventTokens() : impl(std::make_unique<Impl>()) {}
@@ -29,7 +30,20 @@ Window::EventTokens::~EventTokens() = default;
 // 构造/析构
 // ============================================================================
 Window::Window(const Config& config) : config_(config) {}
+
 Window::~Window() {
+    shutting_down_ = true;
+
+    // 注销WebView2事件处理器
+    if (webview_) {
+        ComPtr<ICoreWebView2_2> webview2;
+        if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview2)))) {
+            webview2->remove_WebResourceRequested(event_tokens_.impl->webResourceRequestedToken);
+            webview2->remove_WebMessageReceived(event_tokens_.impl->webMessageReceivedToken);
+        }
+        webview_->remove_NavigationCompleted(event_tokens_.impl->navigationCompletedToken);
+    }
+
     if (controller_) {
         controller_->Release();
         controller_ = nullptr;
@@ -45,7 +59,7 @@ Window::~Window() {
 }
 
 // ============================================================================
-// 辅助函数
+// 辅助函数 - 正确的UTF-8 <-> Wide转换
 // ============================================================================
 static std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return {};
@@ -73,7 +87,8 @@ bool Window::CreateNativeWindow() {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(nullptr);
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    // 使用配置的背景色作为窗口类背景，消除白色闪烁
+    wc.hbrBackground = CreateSolidBrush(config_.bg_color);
     wc.lpszClassName = L"TauriCPPWindowClass";
 
     static bool registered = false;
@@ -98,8 +113,10 @@ bool Window::CreateNativeWindow() {
         y = (screenH - (rect.bottom - rect.top)) / 2;
     }
 
+    // 关键：创建时不显示窗口（不传WS_VISIBLE），等WebView2导航完成后再显示
     hwnd_ = CreateWindowExW(
-        0, wc.lpszClassName,
+        config_.always_on_top ? WS_EX_TOPMOST : 0,
+        wc.lpszClassName,
         Utf8ToWide(config_.title).c_str(),
         style, x, y,
         rect.right - rect.left, rect.bottom - rect.top,
@@ -124,20 +141,78 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     }
 
     switch (msg) {
-    case WM_SIZE:
+    case WM_SIZE: {
         if (self && self->controller_) {
             RECT bounds;
             GetClientRect(hwnd, &bounds);
             self->controller_->put_Bounds(bounds);
         }
+        if (self && self->on_resize_ && wParam != SIZE_MINIMIZED) {
+            RECT clientRect;
+            GetClientRect(hwnd, &clientRect);
+            self->on_resize_(clientRect.right, clientRect.bottom);
+        }
+        if (self) {
+            if (wParam == SIZE_MINIMIZED && self->on_minimize_) {
+                self->on_minimize_();
+            }
+            if (wParam == SIZE_MAXIMIZED && self->on_maximize_) {
+                self->on_maximize_();
+            }
+        }
+        return 0;
+    }
+
+    case WM_ACTIVATE:
+        if (self && self->on_focus_ && LOWORD(wParam) != WA_INACTIVE) {
+            self->on_focus_();
+        }
         return 0;
 
+    case WM_CLOSE:
+        if (self && self->on_close_) {
+            if (!self->on_close_()) {
+                // 用户回调拒绝关闭
+                return 0;
+            }
+        }
+        break;
+
     case WM_DESTROY:
+        if (self) {
+            self->shutting_down_ = true;
+        }
         PostQuitMessage(0);
+        return 0;
+
+    case WM_KEYDOWN:
+        // F12 切换 DevTools
+        if (self && wParam == VK_F12 && self->config_.devtools) {
+            self->ToggleDevTools();
+        }
         return 0;
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// ============================================================================
+// 设置WebView2默认背景色 - 消除白屏核心方案
+// ============================================================================
+void Window::SetWebViewBackgroundColor() {
+    if (!controller_) return;
+
+    // 使用 ICoreWebView2Controller2 设置默认背景色
+    // 这样 WebView2 在页面加载前就显示指定颜色而非白色
+    ComPtr<ICoreWebView2Controller2> controller2;
+    if (SUCCEEDED(controller_->QueryInterface(IID_PPV_ARGS(&controller2)))) {
+        COREWEBVIEW2_COLOR bgColor;
+        bgColor.A = 255;
+        bgColor.R = GetRValue(config_.bg_color);
+        bgColor.G = GetGValue(config_.bg_color);
+        bgColor.B = GetBValue(config_.bg_color);
+        controller2->put_DefaultBackgroundColor(bgColor);
+    }
 }
 
 // ============================================================================
@@ -174,6 +249,9 @@ bool Window::InitWebView() {
                             GetClientRect(hwnd_, &bounds);
                             controller_->put_Bounds(bounds);
 
+                            // ★ 关键：设置WebView2默认背景色，消除白屏闪烁
+                            SetWebViewBackgroundColor();
+
                             // 设置虚拟主机名映射（将tauricpp://映射到虚拟文件系统）
                             SetupResourceInterception();
 
@@ -182,6 +260,22 @@ bool Window::InitWebView() {
 
                             // 导航到起始URL
                             webview_->Navigate(Utf8ToWide(config_.start_url).c_str());
+
+                            // ★ 导航完成后刷新WebView布局
+                            webview_->add_NavigationCompleted(
+                                Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                                    [this](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                                        // 导航完成后重新设置bounds确保WebView正确布局
+                                        if (controller_) {
+                                            RECT bounds;
+                                            GetClientRect(hwnd_, &bounds);
+                                            controller_->put_Bounds(bounds);
+                                        }
+                                        return S_OK;
+                                    }
+                                ).Get(),
+                                &event_tokens_.impl->navigationCompletedToken
+                            );
 
                             webview_ready_ = true;
 
@@ -219,7 +313,6 @@ void Window::SetupResourceInterception() {
         if (lastSlash) *lastSlash = L'\0';
 
         // 始终映射虚拟主机名
-        // 优先使用实际前端目录（开发模式），否则将VirtualFS内容写入临时目录
         std::wstring frontendDir;
         std::vector<std::wstring> candidates = {
             std::wstring(exePath) + L"\\..\\..\\sample\\frontend",
@@ -249,8 +342,8 @@ void Window::SetupResourceInterception() {
             for (const auto& vpath : paths) {
                 VirtualFS::VFile file;
                 if (VirtualFS::Instance().FindFile(vpath, file)) {
-                    // 构建完整文件路径
-                    std::wstring wPath(vpath.begin(), vpath.end());
+                    // 使用正确的UTF-8转Wide转换
+                    std::wstring wPath = Utf8ToWide(vpath);
                     // 去掉开头的 /
                     if (!wPath.empty() && wPath[0] == L'/') wPath = wPath.substr(1);
                     // 将 / 替换为 \，确保 Windows 路径正确
@@ -261,7 +354,6 @@ void Window::SetupResourceInterception() {
 
                     // 创建子目录
                     std::wstring dirPart = fullPath.substr(0, fullPath.rfind(L'\\'));
-                    // 递归创建目录
                     for (size_t pos = vfsDir.size(); pos < dirPart.size(); ) {
                         pos = dirPart.find(L'\\', pos);
                         if (pos == std::wstring::npos) pos = dirPart.size();
@@ -290,7 +382,6 @@ void Window::SetupResourceInterception() {
     }
 
     // 拦截所有 tauricpp.app 请求，从内存VirtualFS提供内容
-    // 当 VirtualFS 有文件时，覆盖文件系统映射的响应
     ComPtr<ICoreWebView2_2> webview2;
     if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         webview2->AddWebResourceRequestedFilter(L"https://tauricpp.app/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
@@ -323,8 +414,30 @@ void Window::SetupResourceInterception() {
                     // 从虚拟文件系统查找
                     VirtualFS::VFile file;
                     if (!VirtualFS::Instance().FindFile(vpath, file)) {
-                        // VirtualFS 中没有，让 WebView2 从文件系统映射获取（兜底）
-                        return S_OK;
+                        // SPA回退：如果找不到文件且不是资源文件，返回index.html
+                        // 这使得前端路由（如 /settings, /about）可以正常工作
+                        bool isStaticAsset = vpath.rfind('.') != std::string::npos;
+                        // 排除常见静态资源扩展名
+                        static const char* assetExts[] = {
+                            ".js", ".css", ".png", ".jpg", ".jpeg", ".gif",
+                            ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+                            ".wasm", ".json", ".xml", ".txt", ".webp", ".map", nullptr
+                        };
+                        bool isAsset = false;
+                        for (auto ext = assetExts; *ext; ++ext) {
+                            if (vpath.size() >= strlen(*ext) &&
+                                _stricmp(vpath.c_str() + vpath.size() - strlen(*ext), *ext) == 0) {
+                                isAsset = true;
+                                break;
+                            }
+                        }
+
+                        if (!isAsset && VirtualFS::Instance().FindFile("/index.html", file)) {
+                            // SPA fallback - 返回index.html
+                        } else {
+                            // VirtualFS 中没有，让 WebView2 从文件系统映射获取（兜底）
+                            return S_OK;
+                        }
                     }
 
                     // 从内存提供内容，覆盖文件系统映射
@@ -374,8 +487,6 @@ void Window::SetupBridge() {
         webview2->add_WebMessageReceived(
             Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                 [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                    // get_WebMessageAsJson: 如果前端 postMessage(string)，返回 JSON编码的字符串如 "\"...\""
-                    // 需要先解析外层JSON，如果是字符串则再解析内层
                     LPWSTR msgW = nullptr;
                     args->get_WebMessageAsJson(&msgW);
                     std::string msgJson = WideToUtf8(msgW);
@@ -383,8 +494,6 @@ void Window::SetupBridge() {
 
                     try {
                         auto parsed = nlohmann::json::parse(msgJson);
-                        // postMessage(JSON.stringify(obj)) 导致双重编码
-                        // get_WebMessageAsJson 返回的是 "\"{...}\""，parse后是字符串
                         nlohmann::json msg;
                         if (parsed.is_string()) {
                             msg = nlohmann::json::parse(parsed.get<std::string>());
@@ -422,7 +531,6 @@ void Window::SetupBridge() {
     }
 
     // 在文档创建时注入桥接JS（在页面脚本执行之前）
-    // 使用 AddScriptToExecuteOnDocumentCreated 确保 __tauricpp__ 在页面脚本运行前就可用
     ComPtr<ICoreWebView2_5> webview5;
     if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview5)))) {
         std::string bridgeJs = Bridge::GetBridgeJs();
@@ -430,16 +538,16 @@ void Window::SetupBridge() {
             Utf8ToWide(bridgeJs).c_str(), nullptr
         );
     } else {
-        // 回退：导航完成后注入
+        // 回退：导航完成后注入桥接JS
         webview_->add_NavigationCompleted(
             Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
                     std::string bridgeJs = Bridge::GetBridgeJs();
                     sender->ExecuteScript(Utf8ToWide(bridgeJs).c_str(), nullptr);
                     return S_OK;
                 }
             ).Get(),
-            &event_tokens_.impl->navigationCompletedToken
+            &event_tokens_.impl->sourceChangedToken  // 复用sourceChangedToken作为回退令牌
         );
     }
 }
@@ -448,8 +556,103 @@ void Window::SetupBridge() {
 // 执行JS
 // ============================================================================
 void Window::ExecuteJs(const std::string& js) {
-    if (!webview_ || !webview_ready_) return;
+    if (!webview_ || !webview_ready_ || shutting_down_) return;
     webview_->ExecuteScript(Utf8ToWide(js).c_str(), nullptr);
+}
+
+// ============================================================================
+// 窗口操作API
+// ============================================================================
+void Window::SetTitle(const std::string& title) {
+    if (hwnd_) {
+        SetWindowTextW(hwnd_, Utf8ToWide(title).c_str());
+    }
+}
+
+void Window::SetSize(int width, int height) {
+    if (!hwnd_) return;
+    DWORD style = GetWindowLongW(hwnd_, GWL_STYLE);
+    RECT rect = { 0, 0, width, height };
+    AdjustWindowRect(&rect, style, FALSE);
+    SetWindowPos(hwnd_, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                 SWP_NOMOVE | SWP_NOZORDER);
+}
+
+void Window::SetPosition(int x, int y) {
+    if (hwnd_) {
+        SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    }
+}
+
+void Window::SetAlwaysOnTop(bool on_top) {
+    if (hwnd_) {
+        HWND zIndex = on_top ? HWND_TOPMOST : HWND_NOTOPMOST;
+        SetWindowPos(hwnd_, zIndex, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    }
+}
+
+void Window::SetResizable(bool resizable) {
+    if (!hwnd_) return;
+    DWORD style = GetWindowLongW(hwnd_, GWL_STYLE);
+    if (resizable) {
+        style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    } else {
+        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    }
+    SetWindowLongW(hwnd_, GWL_STYLE, style);
+    SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+}
+
+void Window::SetIcon(HICON icon) {
+    if (hwnd_ && icon) {
+        SendMessageW(hwnd_, WM_SETICON, ICON_BIG, (LPARAM)icon);
+        SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, (LPARAM)icon);
+    }
+}
+
+void Window::Minimize() {
+    if (hwnd_) ShowWindow(hwnd_, SW_MINIMIZE);
+}
+
+void Window::Maximize() {
+    if (hwnd_) ShowWindow(hwnd_, SW_MAXIMIZE);
+}
+
+void Window::Restore() {
+    if (hwnd_) ShowWindow(hwnd_, SW_RESTORE);
+}
+
+bool Window::IsMinimized() const {
+    return hwnd_ ? IsIconic(hwnd_) : false;
+}
+
+bool Window::IsMaximized() const {
+    return hwnd_ ? IsZoomed(hwnd_) : false;
+}
+
+bool Window::IsFocused() const {
+    return hwnd_ ? (GetForegroundWindow() == hwnd_) : false;
+}
+
+void Window::ToggleDevTools() {
+    if (!webview_) return;
+    ComPtr<ICoreWebView2_3> webview3;
+    if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview3)))) {
+        ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+        // 使用 CDP 命令切换 DevTools
+        static bool devtools_open = false;
+        if (devtools_open) {
+            webview3->CallDevToolsProtocolMethod(L"Page.close", L"{}", nullptr);
+        } else {
+            webview3->CallDevToolsProtocolMethod(L"Page.enable", L"{}", nullptr);
+            // 打开DevTools窗口
+            ComPtr<ICoreWebView2_6> webview6;
+            if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview6)))) {
+                webview6->OpenDevToolsWindow();
+            }
+        }
+        devtools_open = !devtools_open;
+    }
 }
 
 // ============================================================================
@@ -458,6 +661,8 @@ void Window::ExecuteJs(const std::string& js) {
 int Window::Run() {
     if (!CreateNativeWindow()) return -1;
 
+    // 立即显示窗口（背景色已通过SetWebViewBackgroundColor和窗口类画刷设置为深色）
+    // 这样用户立刻看到窗口，而不是等WebView2初始化
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
 

@@ -63,7 +63,13 @@ HMODULE EmbeddedDll::Load(const std::string& resourceId,
     // delay-load 机制通过名称查找 DLL，所以必须用原始名称
     WCHAR tempDir[MAX_PATH];
     GetTempPathW(MAX_PATH, tempDir);
-    std::wstring wDllName(dllName.begin(), dllName.end());
+    // ★ 修复：使用正确的UTF-8转Wide转换，避免非ASCII路径问题
+    // dllName通常只是ASCII文件名，但按标准应该正确转换
+    int wLen = MultiByteToWideChar(CP_UTF8, 0, dllName.c_str(), -1, nullptr, 0);
+    std::wstring wDllName(wLen > 0 ? wLen - 1 : 0, 0);
+    if (wLen > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, dllName.c_str(), -1, wDllName.data(), wLen);
+    }
     temp_file_path_ = std::wstring(tempDir) + wDllName;
 
     // 写入临时文件

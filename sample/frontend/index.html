@@ -45,9 +45,46 @@
         <div class="result-box" id="sysInfo">Click button to fetch...</div>
     </div>
 
+    <!-- 窗口操作 -->
+    <div class="card">
+        <h2>Window Controls</h2>
+        <div class="btn-group">
+            <button onclick="windowMinimize()">Minimize</button>
+            <button onclick="windowMaximize()">Maximize</button>
+            <button onclick="windowRestore()">Restore</button>
+        </div>
+        <div class="input-group" style="margin-top:12px">
+            <input type="text" id="titleInput" placeholder="New window title...">
+            <button onclick="windowSetTitle()">Set Title</button>
+        </div>
+    </div>
+
+    <!-- 文件对话框 -->
+    <div class="card">
+        <h2>File Dialog</h2>
+        <div class="btn-group">
+            <button onclick="dialogOpen()">Open File</button>
+            <button onclick="dialogSave()">Save File</button>
+        </div>
+        <div class="result-box" id="dialogResult">Dialog results will appear here...</div>
+    </div>
+
+    <!-- 剪贴板 -->
+    <div class="card">
+        <h2>Clipboard</h2>
+        <div class="input-group">
+            <input type="text" id="clipboardInput" placeholder="Text to copy...">
+            <button onclick="clipboardWrite()">Copy</button>
+        </div>
+        <div class="btn-group">
+            <button onclick="clipboardRead()">Paste</button>
+        </div>
+        <div class="result-box" id="clipboardResult">Clipboard content will appear here...</div>
+    </div>
+
     <div class="status-bar">
         <span class="status-dot"></span>
-        TauriCPP Framework - VirtualFS Memory Loading - No Temp Files
+        TauriCPP Framework - VirtualFS Memory Loading - No Temp Files - Press F12 for DevTools
     </div>
 
     <script src="js/app.js"></script>

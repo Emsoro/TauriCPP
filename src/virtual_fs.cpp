@@ -19,14 +19,30 @@ void VirtualFS::RegisterFile(const std::string& path, const std::vector<uint8_t>
 
 void VirtualFS::RegisterFile(const std::string& path, const std::string& content, const std::string& mime_type) {
     std::vector<uint8_t> data(content.begin(), content.end());
-    RegisterFile(path, data, mime_type);
+    RegisterFile(path, std::move(data), mime_type);
 }
 
-bool VirtualFS::FindFile(const std::string& path, VFile& out) const {
+void VirtualFS::RegisterFile(const std::string& path, std::vector<uint8_t>&& data, const std::string& mime_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    VFile file;
+    file.data = std::move(data);
+    file.mime_type = mime_type.empty() ? InferMimeType(path) : mime_type;
+    files_[path] = std::move(file);
+}
+
+const VirtualFS::VFile* VirtualFS::FindFile(const std::string& path) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = files_.find(path);
     if (it != files_.end()) {
-        out = it->second;
+        return &it->second;
+    }
+    return nullptr;
+}
+
+bool VirtualFS::FindFile(const std::string& path, VFile& out) const {
+    const VFile* file = FindFile(path);
+    if (file) {
+        out = *file;
         return true;
     }
     return false;
@@ -36,7 +52,14 @@ bool VirtualFS::FindFile(const std::string& path, VFile& out) const {
 // 不在此文件中定义，避免链接冲突
 
 void VirtualFS::LoadFromDirectory(const std::string& dir_path) {
-    std::wstring wDirPath(dir_path.begin(), dir_path.end());
+    // ★ 修复：使用正确的UTF-8到Wide转换，而非简单的char遍历
+    std::wstring wDirPath;
+    int wLen = MultiByteToWideChar(CP_UTF8, 0, dir_path.c_str(), -1, nullptr, 0);
+    if (wLen > 0) {
+        wDirPath.resize(wLen - 1);
+        MultiByteToWideChar(CP_UTF8, 0, dir_path.c_str(), -1, wDirPath.data(), wLen);
+    }
+
     std::wstring searchPattern = wDirPath + L"\\*";
 
     WIN32_FIND_DATAW findData;
@@ -51,7 +74,13 @@ void VirtualFS::LoadFromDirectory(const std::string& dir_path) {
 
         if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             // 递归加载子目录
-            std::string subDir(fullPath.begin(), fullPath.end());
+            // ★ 修复：使用正确的Wide到UTF-8转换
+            int mbLen = WideCharToMultiByte(CP_UTF8, 0, fullPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string subDir;
+            if (mbLen > 0) {
+                subDir.resize(mbLen - 1);
+                WideCharToMultiByte(CP_UTF8, 0, fullPath.c_str(), -1, subDir.data(), mbLen, nullptr, nullptr);
+            }
             LoadFromDirectory(subDir);
         } else {
             // 读取文件到内存
@@ -59,15 +88,16 @@ void VirtualFS::LoadFromDirectory(const std::string& dir_path) {
                                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hFile == INVALID_HANDLE_VALUE) continue;
 
-            DWORD fileSize = GetFileSize(hFile, nullptr);
-            if (fileSize == INVALID_FILE_SIZE || fileSize == 0) {
+            LARGE_INTEGER fileSize;
+            if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart == 0) {
                 CloseHandle(hFile);
                 continue;
             }
 
-            std::vector<uint8_t> buffer(fileSize);
+            // ★ 修复：使用LARGE_INTEGER支持大于4GB的文件（虽然不太可能）
+            std::vector<uint8_t> buffer(static_cast<size_t>(fileSize.QuadPart));
             DWORD bytesRead = 0;
-            ReadFile(hFile, buffer.data(), fileSize, &bytesRead, nullptr);
+            ReadFile(hFile, buffer.data(), static_cast<DWORD>(fileSize.QuadPart), &bytesRead, nullptr);
             CloseHandle(hFile);
 
             if (bytesRead > 0) {
@@ -81,8 +111,15 @@ void VirtualFS::LoadFromDirectory(const std::string& dir_path) {
                 for (auto& ch : relPathW) {
                     if (ch == L'\\') ch = L'/';
                 }
-                std::string relPath(relPathW.begin(), relPathW.end());
-                RegisterFile("/" + relPath, buffer, "");
+                // ★ 修复：使用正确的Wide到UTF-8转换
+                int mbLen2 = WideCharToMultiByte(CP_UTF8, 0, relPathW.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                std::string relPath;
+                if (mbLen2 > 0) {
+                    relPath.resize(mbLen2 - 1);
+                    WideCharToMultiByte(CP_UTF8, 0, relPathW.c_str(), -1, relPath.data(), mbLen2, nullptr, nullptr);
+                }
+                // 使用右值引用版本，避免拷贝
+                RegisterFile("/" + relPath, std::move(buffer), "");
             }
         }
     } while (FindNextFileW(hFind, &findData));
@@ -128,6 +165,12 @@ std::string VirtualFS::InferMimeType(const std::string& path) {
         {"xml", "application/xml"},
         {"txt", "text/plain"},
         {"webp", "image/webp"},
+        {"map", "application/json"},           // source map
+        {"webmanifest", "application/manifest+json"},  // PWA manifest
+        {"mp3", "audio/mpeg"}, {"mp4", "video/mp4"},
+        {"webm", "video/webm"},
+        {"pdf", "application/pdf"},
+        {"zip", "application/zip"},
     };
 
     auto it = mimeMap.find(ext);
