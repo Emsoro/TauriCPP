@@ -92,7 +92,6 @@ add_library(tauricpp STATIC
     src/bridge.cpp
     src/clipboard.cpp
     src/dialog.cpp
-    src/embedded_dll.cpp
     src/virtual_fs.cpp
     src/window.cpp
 )
