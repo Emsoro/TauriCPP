@@ -37,7 +37,9 @@ std::string Bridge::HandleInvoke(const std::string& cmd, const std::string& args
     try {
         nlohmann::json args = nlohmann::json::parse(args_json);
         nlohmann::json result = handler(args);
-        return result.dump();
+        // Use replace error handler to avoid type_error.316 on non-UTF-8 strings
+        std::string dumped = result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        return dumped;
     } catch (const std::exception& e) {
         nlohmann::json result;
         result["error"] = std::string("Exception: ") + e.what();

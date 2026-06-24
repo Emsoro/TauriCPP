@@ -595,7 +595,8 @@ void Window::SetupBridge() {
                                 response["result"] = resultJson;
                             }
 
-                            std::string responseStr = response.dump();
+                            // Use replace error handler to avoid type_error.316 on non-UTF-8 strings
+                            std::string responseStr = response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                             sender->PostWebMessageAsJson(Utf8ToWide(responseStr).c_str());
                         }
                     } catch (const std::exception&) {}
