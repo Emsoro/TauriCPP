@@ -17,6 +17,7 @@ A lightweight C++ desktop application framework powered by WebView2, inspired by
 - **Dark Launch** — Window background color matches frontend theme, eliminating white flash on startup.
 - **Dev/Prod Dual Mode** — Automatically loads from filesystem in development, from embedded resources in production. No code changes required.
 - **Minimal Dependencies** — Only WebView2 SDK and nlohmann/json. No Chromium bundled, no .NET runtime, no Qt.
+- **Persistent Frontend Storage** — IndexedDB, LocalStorage, and SessionStorage work reliably across app launches. WebView2 user data is stored in a stable directory (`<exe_dir>/webview2_data/`) instead of per-PID temp folders, ensuring frontend-side persistence survives restarts.
 - **C++17** — Modern C++ with clean API design.
 
 ## Quick Start
@@ -381,6 +382,11 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## Changelog
+
+### v0.2.2
+
+- **New**: Persistent frontend storage — IndexedDB, LocalStorage, and SessionStorage now survive app restarts
+- **Fix**: WebView2 user data folder changed from `%TEMP%\tauricpp_webview2_<PID>` to `<exe_dir>/webview2_data/`. Previously the per-process-ID temp folder was recreated on every launch, causing all browser-side storage (IndexedDB, cache, etc.) to be lost
 
 ### v0.2.1
 

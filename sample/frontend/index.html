@@ -82,6 +82,26 @@
         <div class="result-box" id="clipboardResult">Clipboard content will appear here...</div>
     </div>
 
+    <!-- IndexedDB 配置持久化 -->
+    <div class="card">
+        <h2>IndexedDB Config</h2>
+        <p style="margin-bottom:12px;color:#888">Persist config across app launches. Save now, restart app, click Load to verify.</p>
+        <div class="input-group">
+            <input type="text" id="configKey" placeholder="Key" value="theme">
+        </div>
+        <div class="input-group">
+            <input type="text" id="configValue" placeholder="Value" value="">
+        </div>
+        <div class="btn-group">
+            <button onclick="configSave()">Save</button>
+            <button onclick="configLoad()">Load</button>
+            <button onclick="configLoadAll()">Load All</button>
+            <button onclick="configDelete()">Delete</button>
+            <button onclick="configClear()">Clear All</button>
+        </div>
+        <div class="result-box" id="configResult">IndexedDB config results will appear here...</div>
+    </div>
+
     <div class="status-bar">
         <span class="status-dot"></span>
         TauriCPP Framework - VirtualFS Memory Loading - No Temp Files - Press F12 for DevTools

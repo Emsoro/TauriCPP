@@ -56,3 +56,6 @@ __pycache__/
 # OS
 Thumbs.db
 Desktop.ini
+
+# WebView2 runtime data (IndexedDB, cache, etc.)
+webview2_data/

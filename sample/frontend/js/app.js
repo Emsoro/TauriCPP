@@ -121,6 +121,106 @@ async function clipboardWrite() {
     }
 }
 
+// ---- IndexedDB Config Persistence ----
+const DB_NAME = 'tauricpp_config';
+const DB_VERSION = 1;
+const STORE_NAME = 'kv';
+
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME);
+            }
+        };
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = (e) => reject(e.target.error);
+    });
+}
+
+async function configSave() {
+    const key = document.getElementById('configKey').value.trim();
+    const value = document.getElementById('configValue').value;
+    if (!key) { showConfigResult('Error: key is empty'); return; }
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(value, key);
+        await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+        showConfigResult('Saved: ' + JSON.stringify({ [key]: value }));
+    } catch(e) {
+        showConfigResult('Error: ' + e.message);
+    }
+}
+
+async function configLoad() {
+    const key = document.getElementById('configKey').value.trim();
+    if (!key) { showConfigResult('Error: key is empty'); return; }
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(key);
+        const value = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = rej; });
+        document.getElementById('configValue').value = value !== undefined ? value : '';
+        showConfigResult(value !== undefined
+            ? 'Loaded: ' + JSON.stringify({ [key]: value })
+            : 'Key not found: ' + key);
+    } catch(e) {
+        showConfigResult('Error: ' + e.message);
+    }
+}
+
+async function configLoadAll() {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const allReq = store.getAll();
+        const keysReq = store.getAllKeys();
+        const [all, keys] = await Promise.all([
+            new Promise((res, rej) => { allReq.onsuccess = () => res(allReq.result); allReq.onerror = rej; }),
+            new Promise((res, rej) => { keysReq.onsuccess = () => res(keysReq.result); keysReq.onerror = rej; })
+        ]);
+        const obj = {};
+        keys.forEach((k, i) => { obj[k] = all[i]; });
+        showConfigResult('All config (' + keys.length + ' entries):\n' + JSON.stringify(obj, null, 2));
+    } catch(e) {
+        showConfigResult('Error: ' + e.message);
+    }
+}
+
+async function configDelete() {
+    const key = document.getElementById('configKey').value.trim();
+    if (!key) { showConfigResult('Error: key is empty'); return; }
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(key);
+        await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+        showConfigResult('Deleted key: ' + key);
+    } catch(e) {
+        showConfigResult('Error: ' + e.message);
+    }
+}
+
+async function configClear() {
+    try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).clear();
+        await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+        showConfigResult('All config cleared.');
+    } catch(e) {
+        showConfigResult('Error: ' + e.message);
+    }
+}
+
+function showConfigResult(msg) {
+    document.getElementById('configResult').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+}
+
 async function clipboardRead() {
     try {
         const result = await __tauricpp__.invoke('clipboard.read', {});
