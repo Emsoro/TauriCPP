@@ -296,12 +296,14 @@ void Window::SetWebViewBackgroundColor() {
 // 初始化WebView2
 // ============================================================================
 bool Window::InitWebView() {
-    // 使用exe所在目录作为稳定的基础路径，确保IndexedDB等持久数据跨启动保留
+    // 使用exe名称作为稳定的基础路径，确保IndexedDB等持久数据跨启动保留
+    WCHAR tempDir[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempDir);
     WCHAR exePath[MAX_PATH];
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    WCHAR* lastSlash = wcsrchr(exePath, L'\\');
-    if (lastSlash) *lastSlash = L'\0';
-    std::wstring userDataFolder = std::wstring(exePath) + L"\\webview2_data";
+    WCHAR* exeName = wcsrchr(exePath, L'\\');
+    exeName = exeName ? exeName + 1 : exePath;
+    std::wstring userDataFolder = std::wstring(tempDir) + L"tauricpp_" + exeName;
     CreateDirectoryW(userDataFolder.c_str(), nullptr);
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, userDataFolder.c_str(), nullptr,

@@ -17,7 +17,7 @@
 - **深色启动** — 窗口背景色匹配前端主题，启动时无白屏闪烁。
 - **开发/生产双模式** — 开发时自动从文件系统加载，生产时从嵌入资源加载，无需修改代码。
 - **极简依赖** — 仅需 WebView2 SDK 和 nlohmann/json，不捆绑 Chromium，不依赖 .NET 运行时，不依赖 Qt。
-- **持久化前端存储** — IndexedDB、LocalStorage、SessionStorage 跨启动可靠工作。WebView2 用户数据存储在稳定目录（`<exe_dir>/webview2_data/`）而非按 PID 创建的临时目录，确保前端侧持久数据在重启后不丢失。
+- **持久化前端存储** — IndexedDB、LocalStorage、SessionStorage 跨启动可靠工作。WebView2 用户数据存储在稳定的临时目录（`%TEMP%/tauricpp_<exe_name>/`）而非按 PID 创建的目录，确保前端侧持久数据在重启后不丢失。
 - **C++17** — 现代 C++，API 简洁清晰。
 
 ## 快速开始
@@ -386,7 +386,7 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 ### v0.2.2
 
 - **新增**：持久化前端存储——IndexedDB、LocalStorage、SessionStorage 跨启动可靠工作
-- **修复**：WebView2 用户数据目录从 `%TEMP%\tauricpp_webview2_<PID>` 改为 `<exe_dir>/webview2_data/`。之前按进程 ID 创建的临时目录每次启动都会重新创建，导致所有浏览器侧存储（IndexedDB、缓存等）丢失
+- **修复**：WebView2 用户数据目录从 `%TEMP%\tauricpp_webview2_<PID>` 改为 `%TEMP%\tauricpp_<exe_name>/`。之前按进程 ID 创建的临时目录每次启动都会重新创建，导致所有浏览器侧存储（IndexedDB、缓存等）丢失
 
 ### v0.2.1
 
