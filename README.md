@@ -416,6 +416,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - **Fix**: CMake resource tracking — frontend file changes now trigger repack
 - **Fix**: Delete copy/move constructors on non-copyable classes
 
+## Donate
+
+If you find TauriCPP helpful, consider buying me a coffee!
+
+![Donate](Donate.jpg)
+
 ## License
 
 MIT

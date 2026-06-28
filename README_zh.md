@@ -416,6 +416,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - **修复**：CMake 资源跟踪——前端文件变更时触发重新打包
 - **修复**：不可拷贝类删除拷贝/移动构造函数
 
+## 打赏
+
+如果 TauriCPP 对你有帮助，欢迎请作者喝杯咖啡！
+
+![打赏](Donate.jpg)
+
 ## 许可证
 
 MIT
