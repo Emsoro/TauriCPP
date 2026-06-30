@@ -9,6 +9,13 @@
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shcore.lib")   // 用于 GetDpiForMonitor / SetProcessDpiAwarenessContext
+// 手动定义坐标提取宏（避免包含windowsx.h带来的宏冲突）
+#ifndef GET_X_LPARAM
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#endif
+#ifndef GET_Y_LPARAM
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+#endif
 
 using namespace Microsoft::WRL;
 
@@ -125,10 +132,16 @@ bool Window::CreateNativeWindow() {
     }
 
     DWORD style = WS_OVERLAPPEDWINDOW;
-    if (!config_.resizable) {
-        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    if (config_.frameless) {
+        style = WS_OVERLAPPEDWINDOW & ~WS_CAPTION;
+        if (!config_.resizable) {
+            style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+        }
+    } else {
+        if (!config_.resizable) {
+            style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+        }
     }
-
     // 根据窗口目标显示位置的 DPI 将"设计尺寸"换算为实际物理像素尺寸
     // 设计尺寸约定：以 96 DPI (100%) 为基准（即 CSS 逻辑像素）
     UINT targetDpi = 96;
@@ -199,6 +212,7 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (self && self->controller_) {
             RECT bounds;
             GetClientRect(hwnd, &bounds);
+            bounds = GetAdjustedClientBounds(self->config_, hwnd, bounds);
             self->controller_->put_Bounds(bounds);
         }
         if (self && self->on_resize_ && wParam != SIZE_MINIMIZED) {
@@ -233,6 +247,7 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (self->controller_) {
                 RECT bounds;
                 GetClientRect(hwnd, &bounds);
+                bounds = GetAdjustedClientBounds(self->config_, hwnd, bounds);
                 self->controller_->put_Bounds(bounds);
             }
             (void)newDpi;
@@ -262,12 +277,53 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         PostQuitMessage(0);
         return 0;
 
-    case WM_KEYDOWN:
-        // F12 切换 DevTools
-        if (self && wParam == VK_F12 && self->config_.devtools) {
-            self->ToggleDevTools();
-        }
+    // 处理异步invoke响应
+    case WM_TAURICPP_INVOKE_RESPONSE:
+        if (self) self->FlushInvokeResponses();
         return 0;
+
+    // 处理线程安全Emit队列
+    case WM_TAURICPP_EMIT:
+        if (self) self->FlushEmitQueue();
+        return 0;
+    case WM_NCCALCSIZE: 
+        if (self && self->config_.frameless && wParam) {
+            return 0;
+        }
+        break;
+    case WM_NCPAINT: 
+        if (self && self->config_.frameless) {
+            return 0; 
+        }
+        break;
+    case WM_NCACTIVATE:
+        if (self && self->config_.frameless) {
+            return TRUE; 
+        }
+        break;
+    case WM_NCHITTEST:
+        if (self && self->config_.frameless) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &pt);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            const int border = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+            if (self->config_.resizable) {
+                if (pt.x < border && pt.y < border) return HTTOPLEFT;
+                if (pt.x >= rc.right - border && pt.y < border) return HTTOPRIGHT;
+                if (pt.x < border && pt.y >= rc.bottom - border) return HTBOTTOMLEFT;
+                if (pt.x >= rc.right - border && pt.y >= rc.bottom - border) return HTBOTTOMRIGHT;
+                if (pt.x < border) return HTLEFT;
+                if (pt.x >= rc.right - border) return HTRIGHT;
+                if (pt.y < border) return HTTOP;
+                if (pt.y >= rc.bottom - border) return HTBOTTOM;
+            }
+            if (pt.y < 40) return HTCAPTION;
+
+            return HTCLIENT;
+        }
+        break;
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -326,10 +382,14 @@ bool Window::InitWebView() {
                             if (webview_) {
                                 webview_->AddRef();
                             }
-
+                            ComPtr<ICoreWebView2Settings> settings;
+                            if (SUCCEEDED(webview_->get_Settings(&settings))) {
+                                settings->put_AreDevToolsEnabled(config_.devtools);  // 控制 DevTools
+                            }
                             // 设置WebView填满窗口
                             RECT bounds;
                             GetClientRect(hwnd_, &bounds);
+                            bounds = GetAdjustedClientBounds(config_, hwnd_, bounds);
                             controller_->put_Bounds(bounds);
 
                             // ★ 关键：设置WebView2默认背景色，消除白屏闪烁
@@ -352,6 +412,7 @@ bool Window::InitWebView() {
                                         if (controller_) {
                                             RECT bounds;
                                             GetClientRect(hwnd_, &bounds);
+                                            bounds = GetAdjustedClientBounds(config_, hwnd_, bounds);
                                             controller_->put_Bounds(bounds);
                                         }
                                         return S_OK;
@@ -361,6 +422,8 @@ bool Window::InitWebView() {
                             );
 
                             webview_ready_ = true;
+                            // ★ 设置Bridge的UI线程信息
+                            Bridge::Instance().SetUiHwnd(hwnd_, GetCurrentThreadId());
 
                             return S_OK;
                         }
@@ -569,7 +632,7 @@ void Window::SetupBridge() {
     if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview2)))) {
         webview2->add_WebMessageReceived(
             Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                [this](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
                     LPWSTR msgW = nullptr;
                     args->get_WebMessageAsJson(&msgW);
                     std::string msgJson = WideToUtf8(msgW);
@@ -583,27 +646,26 @@ void Window::SetupBridge() {
                         } else {
                             msg = parsed;
                         }
-
+                        if (msg.contains("__tauricpp_start_drag")) {
+                            ReleaseCapture();
+                            SendMessage(hwnd_, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
+                            return S_OK;
+                        }
                         if (msg.contains("__tauricpp_invoke") && msg["__tauricpp_invoke"].get<bool>()) {
                             int id = msg["id"].get<int>();
                             std::string cmd = msg["cmd"].get<std::string>();
                             std::string argsStr = msg["args"].dump();
 
-                            std::string resultJson = Bridge::Instance().HandleInvoke(cmd, argsStr);
+                            std::thread([this, id, cmd, argsStr]() {
+                                std::string resultJson = Bridge::Instance().HandleInvoke(cmd, argsStr);
+                                {
+                                    std::lock_guard<std::mutex> lk(response_mtx_);
+                                    pending_responses_.push({id, std::move(resultJson)});
+                                }
+                                PostMessage(hwnd_, WM_TAURICPP_INVOKE_RESPONSE, 0, 0);
+                            }).detach();
 
-                            // 将结果发回前端
-                            nlohmann::json response;
-                            response["__tauricpp_result"] = true;
-                            response["id"] = id;
-                            try {
-                                response["result"] = nlohmann::json::parse(resultJson);
-                            } catch (...) {
-                                response["result"] = resultJson;
-                            }
-
-                            // Use replace error handler to avoid type_error.316 on non-UTF-8 strings
-                            std::string responseStr = response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-                            sender->PostWebMessageAsJson(Utf8ToWide(responseStr).c_str());
+                            return S_OK; // 不在此处回复
                         }
                     } catch (const std::exception&) {}
 
@@ -643,7 +705,52 @@ void Window::ExecuteJs(const std::string& js) {
     if (!webview_ || !webview_ready_ || shutting_down_) return;
     webview_->ExecuteScript(Utf8ToWide(js).c_str(), nullptr);
 }
-
+RECT Window::GetAdjustedClientBounds(const Config& cfg, HWND hwnd, const RECT& clientRect) {
+    if (!cfg.frameless || !cfg.resizable || IsZoomed(hwnd) || IsIconic(hwnd)) {
+        return clientRect;
+    }
+    const int border = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+    RECT adjusted = clientRect;
+    adjusted.left   += border;
+    adjusted.top    += border;
+    adjusted.right  -= border;
+    adjusted.bottom -= border;
+    return adjusted;
+}
+void Window::FlushInvokeResponses() {
+    std::vector<std::pair<int64_t, std::string>> batch;
+    {
+        std::lock_guard<std::mutex> lk(response_mtx_);
+        while (!pending_responses_.empty()) {
+            batch.push_back(std::move(pending_responses_.front()));
+            pending_responses_.pop();
+        }
+    }
+    for (auto& [id, resultJson] : batch) {
+        nlohmann::json response;
+        response["__tauricpp_result"] = true;
+        response["id"] = id;
+        try {
+            response["result"] = nlohmann::json::parse(resultJson);
+        } catch (...) {
+            response["result"] = resultJson;
+        }
+        std::string responseStr = response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        webview_->PostWebMessageAsJson(Utf8ToWide(responseStr).c_str());
+    }
+}
+void Window::FlushEmitQueue() {
+    auto events = Bridge::Instance().ConsumePendingEvents();
+    for (auto& [event, payloadJson] : events) {
+        nlohmann::json callArgs;
+        callArgs["event"] = event;
+        callArgs["data"] = nlohmann::json::parse(payloadJson);
+        std::string js = "__tauricpp_internal_emit(" 
+            + callArgs.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) 
+            + ");";
+        ExecuteJs(js);
+    }
+}
 // ============================================================================
 // 窗口操作API
 // ============================================================================
@@ -718,27 +825,6 @@ bool Window::IsFocused() const {
     return hwnd_ ? (GetForegroundWindow() == hwnd_) : false;
 }
 
-void Window::ToggleDevTools() {
-    if (!webview_) return;
-    ComPtr<ICoreWebView2_3> webview3;
-    if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview3)))) {
-        ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
-        // 使用 CDP 命令切换 DevTools
-        static bool devtools_open = false;
-        if (devtools_open) {
-            webview3->CallDevToolsProtocolMethod(L"Page.close", L"{}", nullptr);
-        } else {
-            webview3->CallDevToolsProtocolMethod(L"Page.enable", L"{}", nullptr);
-            // 打开DevTools窗口
-            ComPtr<ICoreWebView2_6> webview6;
-            if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview6)))) {
-                webview6->OpenDevToolsWindow();
-            }
-        }
-        devtools_open = !devtools_open;
-    }
-}
-
 // ============================================================================
 // 运行
 // ============================================================================
@@ -748,6 +834,7 @@ int Window::Run() {
     // 立即显示窗口（背景色已通过SetWebViewBackgroundColor和窗口类画刷设置为深色）
     // 这样用户立刻看到窗口，而不是等WebView2初始化
     ShowWindow(hwnd_, SW_SHOW);
+    SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     UpdateWindow(hwnd_);
 
     if (!InitWebView()) return -1;

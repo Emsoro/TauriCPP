@@ -4,9 +4,16 @@
 #include <unordered_map>
 #include <mutex>
 #include <optional>
+#include <vector>
+#include <queue>
+#include <Windows.h>
 #include <nlohmann/json.hpp>
 
 namespace tauricpp {
+
+// 自定义消息 ID，用于 Bridge 与 Window 之间的线程间通信
+inline constexpr UINT WM_TAURICPP_INVOKE_RESPONSE = WM_APP + 300;
+inline constexpr UINT WM_TAURICPP_EMIT            = WM_APP + 301;
 
 /// 前后端通信桥接
 /// JS -> C++: window.__tauricpp__.invoke(cmd, args) -> 返回Promise
@@ -62,11 +69,17 @@ public:
     /// 获取注入到前端的桥接JS代码
     static std::string GetBridgeJs();
 
+    void SetUiHwnd(HWND hwnd, DWORD tid);
+    std::vector<std::pair<std::string, std::string>> ConsumePendingEvents();
 private:
     Bridge() = default;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, InvokeHandler> commands_;
     ExecuteJsCallback execute_js_;
+    HWND ui_hwnd_ = nullptr;
+    DWORD ui_thread_id_ = 0;
+    std::mutex pending_mtx_;
+    std::vector<std::pair<std::string, std::string>> pending_events_;
 };
 
 } // namespace tauricpp
