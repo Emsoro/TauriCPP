@@ -48,29 +48,51 @@ std::string Bridge::HandleInvoke(const std::string& cmd, const std::string& args
 }
 
 void Bridge::Emit(const std::string& event, const nlohmann::json& data) {
-    // ★ 修复：用atomic风格的读取（execute_js_只设置一次后不变）
-    // 先拷贝到局部变量，避免竞态
-    ExecuteJsCallback cb;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        cb = execute_js_;
+    // 检查当前线程是否为UI线程
+    if (GetCurrentThreadId() == ui_thread_id_) {
+        // UI线程直接执行
+        ExecuteJsCallback cb;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cb = execute_js_;
+        }
+        if (!cb) return;
+
+        nlohmann::json callArgs;
+        callArgs["event"] = event;
+        callArgs["data"] = data;
+        std::string js = "__tauricpp_internal_emit(" + callArgs.dump() + ");";
+        cb(js);
+    } else {
+        // 非UI线程：入队，通知UI线程
+        std::string payload = data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        {
+            std::lock_guard<std::mutex> lk(pending_mtx_);
+            pending_events_.emplace_back(event, std::move(payload));
+        }
+        if (ui_hwnd_) {
+            PostMessageW(ui_hwnd_, WM_TAURICPP_EMIT, 0, 0);
+        }
     }
-
-    if (!cb) return;
-
-    // ★ 修复XSS：使用JSON.stringify构造安全的JS调用，而非字符串拼接
-    // 将event名称也用JSON编码，防止注入单引号等特殊字符
-    nlohmann::json callArgs;
-    callArgs["event"] = event;
-    callArgs["data"] = data;
-    std::string js = "__tauricpp_internal_emit(" + callArgs.dump() + ");";
-
-    cb(js);
 }
 
 void Bridge::SetExecuteJsCallback(ExecuteJsCallback cb) {
     std::lock_guard<std::mutex> lock(mutex_);
     execute_js_ = std::move(cb);
+}
+
+void Bridge::SetUiHwnd(HWND hwnd, DWORD tid) {
+    ui_hwnd_ = hwnd;
+    ui_thread_id_ = tid;
+}
+
+std::vector<std::pair<std::string, std::string>> Bridge::ConsumePendingEvents() {
+    std::vector<std::pair<std::string, std::string>> result;
+    {
+        std::lock_guard<std::mutex> lk(pending_mtx_);
+        result.swap(pending_events_);
+    }
+    return result;
 }
 
 std::string Bridge::GetBridgeJs() {

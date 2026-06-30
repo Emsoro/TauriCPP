@@ -3,6 +3,8 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <mutex>
+#include <queue>
 #include <Windows.h>
 
 // WebView2 前向声明
@@ -38,6 +40,7 @@ public:
         bool resizable = true;
         bool always_on_top = false;
         bool devtools = false;          ///< 是否启用DevTools（F12切换）
+        bool frameless = false;              // 无边框模式
         std::string start_url = "https://tauricpp.app/index.html";
         COLORREF bg_color = RGB(15, 12, 41);  ///< 默认背景色（匹配前端渐变起点），消除白屏
     };
@@ -84,8 +87,6 @@ public:
     void OnMaximize(MaximizeCallback cb) { on_maximize_ = std::move(cb); }
     void OnFocus(FocusCallback cb) { on_focus_ = std::move(cb); }
 
-    /// 切换DevTools（F12也会触发）
-    void ToggleDevTools();
 
 private:
     /// 创建Win32窗口
@@ -106,6 +107,10 @@ private:
     /// Win32窗口过程
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+    static RECT GetAdjustedClientBounds(const Config& cfg, HWND hwnd, const RECT& clientRect);
+    // --- 异步invoke相关 ---
+    void FlushInvokeResponses();
+    void FlushEmitQueue();
     Config config_;
     HWND hwnd_ = nullptr;
     ICoreWebView2* webview_ = nullptr;
@@ -128,6 +133,8 @@ private:
         struct Impl;
         std::unique_ptr<Impl> impl;
     } event_tokens_;
+    std::mutex response_mtx_;
+    std::queue<std::pair<int64_t, std::string>> pending_responses_;
 };
 
 } // namespace tauricpp
