@@ -6,11 +6,17 @@
 #include <wrl.h>
 #include <shlwapi.h>
 #include <shellscalingapi.h>
+#include <queue>
+#include <mutex>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shcore.lib")   // 用于 GetDpiForMonitor / SetProcessDpiAwarenessContext
 
 using namespace Microsoft::WRL;
+
+// 自定义窗口消息 - 用于投递JS到UI线程执行
+static const UINT WM_TAURICP_EXECUTE_JS = WM_APP + 1;
+
 
 // ============================================================================
 // DPI 辅助：Per-Monitor V2 感知（运行时兜底，即便 manifest 缺失也能正常渲染）
@@ -58,6 +64,12 @@ Window::Window(const Config& config) : config_(config) {}
 
 Window::~Window() {
     shutting_down_ = true;
+
+    // 清理JS队列
+    {
+        std::lock_guard<std::mutex> lock(jsQueueMutex_);
+        while (!jsQueue_.empty()) jsQueue_.pop();
+    }
 
     // 注销WebView2事件处理器
     if (webview_) {
@@ -246,6 +258,12 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
 
+    case WM_TAURICP_EXECUTE_JS:
+        if (self) {
+            self->ExecuteJsFromQueue();
+        }
+        return 0;
+
     case WM_CLOSE:
         if (self && self->on_close_) {
             if (!self->on_close_()) {
@@ -305,6 +323,7 @@ bool Window::InitWebView() {
     exeName = exeName ? exeName + 1 : exePath;
     std::wstring userDataFolder = std::wstring(tempDir) + L"tauricpp_" + exeName;
     CreateDirectoryW(userDataFolder.c_str(), nullptr);
+
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         nullptr, userDataFolder.c_str(), nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -316,8 +335,8 @@ bool Window::InitWebView() {
 
                 env->CreateCoreWebView2Controller(hwnd_,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [this](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                            if (FAILED(result)) return result;
+                         [this](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                             if (FAILED(result)) return result;
 
                             controller_ = controller;
                             controller_->AddRef();
@@ -371,6 +390,7 @@ bool Window::InitWebView() {
         ).Get()
     );
 
+    // 异步初始化，不等待（WebView2回调在消息循环中分发）
     return SUCCEEDED(hr);
 }
 
@@ -637,11 +657,39 @@ void Window::SetupBridge() {
 }
 
 // ============================================================================
-// 执行JS
+// 执行JS - 通过PostMessage投递到UI线程安全执行
 // ============================================================================
 void Window::ExecuteJs(const std::string& js) {
+    if (shutting_down_ || !hwnd_) return;
+
+    // 入队JS字符串
+    {
+        std::lock_guard<std::mutex> lock(jsQueueMutex_);
+        jsQueue_.push(js);
+    }
+    // 通知UI线程处理
+    PostMessageW(hwnd_, WM_TAURICP_EXECUTE_JS, 0, 0);
+}
+
+// 在UI线程处理JS执行队列
+void Window::ExecuteJsFromQueue() {
     if (!webview_ || !webview_ready_ || shutting_down_) return;
-    webview_->ExecuteScript(Utf8ToWide(js).c_str(), nullptr);
+    
+    while (true) {
+        std::string js;
+        {
+            std::lock_guard<std::mutex> lock(jsQueueMutex_);
+            if (jsQueue_.empty()) break;
+            js = jsQueue_.front();
+            jsQueue_.pop();
+        }
+        // Log first 80 chars for debugging
+        std::string jsPreview = js.substr(0, 80);
+        char buf[256];
+        snprintf(buf, sizeof(buf), "[TauriCPP] ExecuteJsFromQueue: (len=%zu): %s\n", js.size(), jsPreview.c_str());
+        OutputDebugStringA(buf);
+        webview_->ExecuteScript(Utf8ToWide(js).c_str(), nullptr);
+    }
 }
 
 // ============================================================================
@@ -740,10 +788,16 @@ void Window::ToggleDevTools() {
 }
 
 // ============================================================================
+// 从队列取出并执行JS（必须在UI线程调用）
+// ============================================================================
+// ============================================================================
 // 运行
 // ============================================================================
 int Window::Run() {
     if (!CreateNativeWindow()) return -1;
+
+    // 记录主线程ID
+    mainThreadId_ = GetCurrentThreadId();
 
     // 立即显示窗口（背景色已通过SetWebViewBackgroundColor和窗口类画刷设置为深色）
     // 这样用户立刻看到窗口，而不是等WebView2初始化

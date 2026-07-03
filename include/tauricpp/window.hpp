@@ -3,6 +3,8 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <queue>
+#include <mutex>
 #include <Windows.h>
 
 // WebView2 前向声明
@@ -59,6 +61,9 @@ public:
 
     /// 执行JavaScript代码
     void ExecuteJs(const std::string& js);
+
+    /// 从队列取出并执行JS（UI线程调用）
+    void ExecuteJsFromQueue();
 
     /// 获取窗口句柄
     HWND GetHwnd() const { return hwnd_; }
@@ -128,6 +133,13 @@ private:
         struct Impl;
         std::unique_ptr<Impl> impl;
     } event_tokens_;
+
+    // UI线程ID（用于投递JS执行）
+    DWORD mainThreadId_ = 0;
+
+    // 线程安全的JS执行队列
+    std::mutex jsQueueMutex_;
+    std::queue<std::string> jsQueue_;
 };
 
 } // namespace tauricpp

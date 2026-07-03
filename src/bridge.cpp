@@ -114,8 +114,14 @@ std::string Bridge::GetBridgeJs() {
 
     // ★ 安全的事件分发：从JSON对象中读取event和data，不使用字符串拼接
     window.__tauricpp_internal_emit = function(payload) {
+        console.log('[TauriCPP] __tauricpp_internal_emit called, payload:', JSON.stringify(payload).substring(0,200));
+        if (!payload || typeof payload !== 'object') {
+            console.error('[TauriCPP] Invalid payload:', payload);
+            return;
+        }
         var event = payload.event;
         var data = payload.data;
+        console.log('[TauriCPP] Dispatching event "' + event + '", listeners:', __tauricpp__._listeners[event] ? __tauricpp__._listeners[event].length : 0);
         if (__tauricpp__._listeners[event]) {
             __tauricpp__._listeners[event].forEach(function(cb) {
                 try {
