@@ -29,6 +29,11 @@ public:
         bool overwrite_prompt = true;
     };
 
+    struct PickFolderOptions {
+        std::string title = "Select Folder";  ///< 对话框标题
+        std::string default_path;             ///< 默认打开的文件夹路径（可选）
+    };
+
     /// 打开文件选择对话框（阻塞）
     /// @return 选中的文件路径列表，取消返回空
     static std::vector<std::string> OpenFile(HWND parent, const OpenOptions& options = {});
@@ -40,6 +45,11 @@ public:
     /// 选择文件夹对话框（阻塞）
     /// @return 选中的文件夹路径，取消返回空
     static std::optional<std::string> PickFolder(HWND parent, const std::string& title = "Select Folder");
+
+    /// 选择文件夹对话框（阻塞），支持属性值配置
+    /// @param options 标题与默认路径等属性
+    /// @return 选中的文件夹路径，取消返回空
+    static std::optional<std::string> PickFolder(HWND parent, const PickFolderOptions& options);
 
     /// 显示消息框
     static void ShowInfo(HWND parent, const std::string& title, const std::string& message);

@@ -6,6 +6,7 @@
 #include <wrl.h>
 #include <shlwapi.h>
 #include <shellscalingapi.h>
+#include <versionhelpers.h>
 #include <queue>
 #include <mutex>
 
@@ -112,6 +113,50 @@ static std::string WideToUtf8(const std::wstring& str) {
     std::string result(len - 1, 0);
     WideCharToMultiByte(CP_UTF8, 0, str.c_str(), -1, result.data(), len, nullptr, nullptr);
     return result;
+}
+
+// ============================================================================
+// WebView2 Runtime 可用性检测
+// ============================================================================
+static bool IsWebView2RuntimeAvailable(std::wstring* outVersion = nullptr) {
+    // 查询系统是否安装了 Microsoft Edge WebView2 Runtime
+    // 返回 S_OK 且 versionInfo 非空表示可用
+    LPWSTR versionInfo = nullptr;
+    HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
+    bool available = SUCCEEDED(hr) && versionInfo != nullptr;
+    if (available && outVersion) {
+        *outVersion = versionInfo;
+    }
+    if (versionInfo) {
+        CoTaskMemFree(versionInfo);
+    }
+    return available;
+}
+
+// 友好的提示对话框：当机器上缺少 WebView2 Runtime 时显示
+static void ShowWebView2MissingMessage(HWND hwnd) {
+    std::wstring title = L"缺少 WebView2 运行时";
+    std::wstring msg =
+        L"无法启动应用：当前系统未检测到 Microsoft Edge WebView2 Runtime。\n\n"
+        L"TauriCPP 依赖 WebView2 来渲染界面。请按以下步骤安装后重试：\n\n"
+        L"1. 访问官方下载页面：\n"
+        L"   https://go.microsoft.com/fwlink/p/?LinkId=2124703\n"
+        L"2. 下载并运行 “Evergreen Bootstrapper（常青版引导程序）”。\n"
+        L"3. 安装完成后重新启动本程序。\n\n"
+        L"提示：Windows 10/11 通常已预装；若被卸载或禁用，则需手动安装。";
+
+    // Windows 7 不支持常青版，需安装最后一个支持的固定版本
+    if (IsWindows7OrGreater() && !IsWindows8OrGreater()) {
+        msg +=
+            L"\n注意：当前为 Windows 7 系统，常青版 Bootstrapper 已不再支持。\n"
+            L"请安装最后一个支持 Win7 的固定版本：\n"
+            L"  WebView2 Runtime 109.0.1518.140\n"
+            L"  下载地址：\n"
+            L"  https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/\n"
+            L"  (选择 “Fixed Version”，版本号 109.0.1518.140)";
+    }
+
+    MessageBoxW(hwnd, msg.c_str(), title.c_str(), MB_OK | MB_ICONWARNING);
 }
 
 // ============================================================================
@@ -803,6 +848,12 @@ int Window::Run() {
     // 这样用户立刻看到窗口，而不是等WebView2初始化
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
+
+    // 启动前检测 WebView2 Runtime 是否可用，缺失则给出友好提示
+    if (!IsWebView2RuntimeAvailable()) {
+        ShowWebView2MissingMessage(hwnd_);
+        return -2;
+    }
 
     if (!InitWebView()) return -1;
 

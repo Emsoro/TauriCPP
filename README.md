@@ -321,8 +321,14 @@ saveOpts.title = "Save File";
 saveOpts.default_filename = "untitled.txt";
 auto path = tauricpp::Dialog::SaveFile(hwnd, saveOpts);
 
-// Folder picker
-auto folder = tauricpp::Dialog::PickFolder(hwnd, "Select Folder");
+// Folder picker (with configurable properties)
+tauricpp::Dialog::PickFolderOptions folderOpts;
+folderOpts.title = "Select Folder";
+folderOpts.default_path = "C:\\Users";        // optional default folder
+auto folder = tauricpp::Dialog::PickFolder(hwnd, folderOpts);
+
+// Or use the simple overload
+auto folder2 = tauricpp::Dialog::PickFolder(hwnd, "Select Folder");
 
 // Message boxes
 tauricpp::Dialog::ShowInfo(hwnd, "Info", "Operation completed");
@@ -382,6 +388,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## Changelog
+
+### v1.0.4
+
+- **New**: Folder picker now accepts configurable properties via `tauricpp::Dialog::PickFolderOptions` (`title`, `default_path`); the original `PickFolder(hwnd, title)` overload is retained for compatibility.
+- **New**: Sample File Dialog adds a "Select Folder" button that writes the chosen folder path into a text box, along with `title` and `default_path` input fields.
+- **New**: WebView2 Runtime availability check at startup. If the runtime is missing, a friendly message box is shown with install instructions; Windows 7 users are directed to the last supported fixed version (109.0.1518.140).
 
 ### v0.2.2
 

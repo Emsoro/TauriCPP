@@ -193,6 +193,10 @@ std::optional<std::string> Dialog::SaveFile(HWND parent, const SaveOptions& opti
 }
 
 std::optional<std::string> Dialog::PickFolder(HWND parent, const std::string& title) {
+    return PickFolder(parent, PickFolderOptions{title, ""});
+}
+
+std::optional<std::string> Dialog::PickFolder(HWND parent, const PickFolderOptions& options) {
     std::optional<std::string> result;
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -211,8 +215,19 @@ std::optional<std::string> Dialog::PickFolder(HWND parent, const std::string& ti
     fos |= FOS_PICKFOLDERS | FOS_FILEMUSTEXIST;
     pfd->SetOptions(fos);
 
-    if (!title.empty()) {
-        pfd->SetTitle(Utf8ToWide(title).c_str());
+    if (!options.title.empty()) {
+        pfd->SetTitle(Utf8ToWide(options.title).c_str());
+    }
+
+    // 设置默认打开的文件夹（属性值）
+    if (!options.default_path.empty()) {
+        IShellItem* psiFolder = nullptr;
+        SHCreateItemFromParsingName(Utf8ToWide(options.default_path).c_str(), nullptr,
+                                     IID_PPV_ARGS(&psiFolder));
+        if (psiFolder) {
+            pfd->SetDefaultFolder(psiFolder);
+            psiFolder->Release();
+        }
     }
 
     hr = pfd->Show(parent);

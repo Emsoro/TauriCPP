@@ -321,8 +321,14 @@ saveOpts.title = "保存文件";
 saveOpts.default_filename = "未命名.txt";
 auto path = tauricpp::Dialog::SaveFile(hwnd, saveOpts);
 
-// 选择文件夹
-auto folder = tauricpp::Dialog::PickFolder(hwnd, "选择文件夹");
+// 选择文件夹（支持配置属性）
+tauricpp::Dialog::PickFolderOptions folderOpts;
+folderOpts.title = "选择文件夹";
+folderOpts.default_path = "C:\\Users";        // 可选默认文件夹
+auto folder = tauricpp::Dialog::PickFolder(hwnd, folderOpts);
+
+// 或使用简单重载
+auto folder2 = tauricpp::Dialog::PickFolder(hwnd, "选择文件夹");
 
 // 消息框
 tauricpp::Dialog::ShowInfo(hwnd, "提示", "操作完成");
@@ -382,6 +388,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## 更新日志
+
+### v1.0.4
+
+- **新增**：文件夹选择支持通过 `tauricpp::Dialog::PickFolderOptions`（`title`、`default_path`）配置属性；原有的 `PickFolder(hwnd, title)` 重载保留以兼容旧代码。
+- **新增**：示例文件对话框新增「Select Folder」按钮，将所选文件夹路径写入文本框，并提供 `title` 与 `default_path` 输入框。
+- **新增**：启动时检测 WebView2 运行时。若缺失则弹出友好提示框并提供安装指引；Windows 7 用户会被引导安装最后支持的固定版本（109.0.1518.140）。
 
 ### v0.2.2
 

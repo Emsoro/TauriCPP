@@ -119,6 +119,22 @@ async function dialogSave() {
     }
 }
 
+async function dialogPickFolder() {
+    const title = document.getElementById('folderTitleInput').value;
+    const defaultPath = document.getElementById('folderPathInput').value;
+    try {
+        const result = await __tauricpp__.invoke('dialog.pick_folder', {
+            title: title,
+            default_path: defaultPath
+        });
+        // 将选中的文件夹路径赋值给只读文本框
+        document.getElementById('folderResultInput').value = result.path || '';
+        document.getElementById('dialogResult').textContent = JSON.stringify(result, null, 2);
+    } catch(e) {
+        document.getElementById('dialogResult').textContent = 'Error: ' + e.message;
+    }
+}
+
 // ---- Clipboard ----
 async function clipboardWrite() {
     const text = document.getElementById('clipboardInput').value;

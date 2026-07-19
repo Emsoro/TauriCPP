@@ -67,6 +67,16 @@
         <div class="btn-group">
             <button onclick="dialogOpen()">Open File</button>
             <button onclick="dialogSave()">Save File</button>
+            <button onclick="dialogPickFolder()">Select Folder</button>
+        </div>
+        <div class="input-group" style="margin-top:12px">
+            <input type="text" id="folderTitleInput" placeholder="Folder dialog title..." value="Select Folder">
+        </div>
+        <div class="input-group">
+            <input type="text" id="folderPathInput" placeholder="Default folder path (optional)...">
+        </div>
+        <div class="input-group">
+            <input type="text" id="folderResultInput" placeholder="Selected folder path..." readonly>
         </div>
         <div class="result-box" id="dialogResult">Dialog results will appear here...</div>
     </div>

@@ -94,6 +94,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         return result;
     });
 
+    // dialog.pick_folder 命令 - 选择文件夹对话框（支持属性值）
+    bridge.RegisterCommand("dialog.pick_folder", [](const nlohmann::json& args) -> nlohmann::json {
+        tauricpp::Dialog::PickFolderOptions opts;
+        opts.title = args.value("title", "Select Folder");
+        opts.default_path = args.value("default_path", "");
+        auto path = tauricpp::Dialog::PickFolder(nullptr, opts);
+        nlohmann::json result;
+        result["path"] = path.value_or("");
+        result["cancelled"] = !path.has_value();
+        return result;
+    });
+
     // clipboard.read 命令
     bridge.RegisterCommand("clipboard.read", [](const nlohmann::json&) -> nlohmann::json {
         auto text = tauricpp::Clipboard::ReadText();
