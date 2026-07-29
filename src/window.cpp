@@ -7,16 +7,96 @@
 #include <shlwapi.h>
 #include <shellscalingapi.h>
 #include <versionhelpers.h>
+#include <ole2.h>
 #include <queue>
 #include <mutex>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shcore.lib")   // 用于 GetDpiForMonitor / SetProcessDpiAwarenessContext
+#pragma comment(lib, "ole32.lib")
 
 using namespace Microsoft::WRL;
 
 // 自定义窗口消息 - 用于投递JS到UI线程执行
 static const UINT WM_TAURICP_EXECUTE_JS = WM_APP + 1;
+
+// ============================================================================
+// FileDropTarget - 实现 IDropTarget 接口，拦截文件拖拽
+// ============================================================================
+class FileDropTarget : public IDropTarget {
+public:
+    FileDropTarget(HWND hwnd) : hwnd_(hwnd), refCount_(1) {}
+
+    // IUnknown
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refCount_); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        LONG c = InterlockedDecrement(&refCount_);
+        if (c == 0) delete this;
+        return c;
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) { *ppv = this; AddRef(); return S_OK; }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+
+    // IDropTarget
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override {
+        dataObj_ = pDataObj;
+        *pdwEffect = DROPEFFECT_COPY;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override {
+        *pdwEffect = DROPEFFECT_COPY;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        dataObj_ = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect) override {
+        *pdwEffect = DROPEFFECT_NONE;
+        // 检查是否包含 CF_HDROP 格式（文件拖拽）
+        FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM stg;
+        if (SUCCEEDED(pDataObj->GetData(&fmt, &stg))) {
+            HDROP hDrop = static_cast<HDROP>(GlobalLock(stg.hGlobal));
+            if (hDrop) {
+                UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+                if (fileCount > 0) {
+                    wchar_t pathW[MAX_PATH] = {};
+                    DragQueryFileW(hDrop, 0, pathW, MAX_PATH);
+                    // 宽字符转UTF-8
+                    int len = WideCharToMultiByte(CP_UTF8, 0, pathW, -1, nullptr, 0, nullptr, nullptr);
+                    std::string utf8Path(len, 0);
+                    WideCharToMultiByte(CP_UTF8, 0, pathW, -1, &utf8Path[0], len, nullptr, nullptr);
+                    if (!utf8Path.empty() && utf8Path.back() == '\0') utf8Path.pop_back();
+
+                    // 获取鼠标坐标（相对于窗口客户区）
+                    POINT cursorPos;
+                    GetCursorPos(&cursorPos);
+                    ScreenToClient(hwnd_, &cursorPos);
+
+                    // 发送事件给前端（包含鼠标X坐标，用于判断左/右）
+                    nlohmann::json pathJson;
+                    pathJson["path"] = utf8Path;
+                    pathJson["x"] = cursorPos.x;
+                    pathJson["y"] = cursorPos.y;
+                    tauricpp::Bridge::Instance().Emit("file-dropped", pathJson);
+                }
+                GlobalUnlock(stg.hGlobal);
+            }
+            ReleaseStgMedium(&stg);
+            *pdwEffect = DROPEFFECT_COPY;
+        }
+        dataObj_ = nullptr;
+        return S_OK;
+    }
+
+private:
+    HWND hwnd_;
+    LONG refCount_;
+    ComPtr<IDataObject> dataObj_;
+};
 
 
 // ============================================================================
@@ -65,6 +145,20 @@ Window::Window(const Config& config) : config_(config) {}
 
 Window::~Window() {
     shutting_down_ = true;
+
+    // 清理文件拖拽目标
+    if (fileDropTarget_) {
+        auto* target = static_cast<FileDropTarget*>(fileDropTarget_);
+        if (hwnd_) {
+            EnumChildWindows(hwnd_, [](HWND child, LPARAM) -> BOOL {
+                RevokeDragDrop(child);
+                return TRUE;
+            }, 0);
+            RevokeDragDrop(hwnd_);
+        }
+        target->Release();
+        fileDropTarget_ = nullptr;
+    }
 
     // 清理JS队列
     {
@@ -395,6 +489,22 @@ bool Window::InitWebView() {
                             RECT bounds;
                             GetClientRect(hwnd_, &bounds);
                             controller_->put_Bounds(bounds);
+
+                            // ★ 用自定义 IDropTarget 替换 WebView2 子窗口的拖拽处理
+                            OleInitialize(nullptr);
+                            {
+                                auto* dropTarget = new FileDropTarget(hwnd_);
+                                fileDropTarget_ = dropTarget;
+                                // 撤销所有子窗口的 OLE 拖拽，并注册我们自己的
+                                struct EnumData { IDropTarget* target; };
+                                EnumData data{ dropTarget };
+                                EnumChildWindows(hwnd_, [](HWND child, LPARAM lParam) -> BOOL {
+                                    RevokeDragDrop(child);
+                                    auto* d = reinterpret_cast<EnumData*>(lParam);
+                                    RegisterDragDrop(child, d->target);
+                                    return TRUE;
+                                }, reinterpret_cast<LPARAM>(&data));
+                            }
 
                             // ★ 关键：设置WebView2默认背景色，消除白屏闪烁
                             SetWebViewBackgroundColor();

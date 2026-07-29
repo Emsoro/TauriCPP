@@ -140,6 +140,9 @@ private:
     // 线程安全的JS执行队列
     std::mutex jsQueueMutex_;
     std::queue<std::string> jsQueue_;
+
+    // 文件拖拽目标 (实际类型为 FileDropTarget*, 在 window.cpp 中定义)
+    void* fileDropTarget_ = nullptr;
 };
 
 } // namespace tauricpp
