@@ -74,18 +74,80 @@ async function windowMinimize() {
     await __tauricpp__.invoke('window.minimize', {});
 }
 
-async function windowMaximize() {
-    await __tauricpp__.invoke('window.maximize', {});
-}
-
 async function windowRestore() {
     await __tauricpp__.invoke('window.restore', {});
+    syncMaximizeButton();
+}
+
+async function windowClose() {
+    await __tauricpp__.invoke('window.close', {});
+}
+
+async function windowToggleMaximize() {
+    const result = await __tauricpp__.invoke('window.toggle_maximize', {});
+    setMaximizeIcon(result.maximized);
 }
 
 async function windowSetTitle() {
     const title = document.getElementById('titleInput').value;
+    document.getElementById('titlebarTitle').textContent = title || 'TauriCPP Demo';
     await __tauricpp__.invoke('window.set_title', { title: title });
 }
+
+// ---- 自绘标题栏 ----
+function setMaximizeIcon(maximized) {
+    const btn = document.getElementById('btnMaximize');
+    btn.classList.toggle('is-maximized', !!maximized);
+    const label = maximized ? '还原' : '最大化';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+}
+
+async function syncMaximizeButton() {
+    const result = await __tauricpp__.invoke('window.is_maximized', {});
+    setMaximizeIcon(result.maximized);
+}
+
+(function initTitlebar() {
+    const titlebar = document.getElementById('titlebar');
+
+    // 拖动 vs 双击：把"开始拖拽"延迟到鼠标移动超过阈值才触发。
+    // 这样不移动的纯双击不会进入系统拖拽模态循环，dblclick 才能正常派发去最大化/还原。
+    titlebar.addEventListener('mousedown', function(e) {
+        if (e.button !== 0 || e.target.closest('.window-controls')) return;
+        const startX = e.clientX, startY = e.clientY;
+        let dragging = false;
+        const onMove = function(ev) {
+            if (dragging) return;
+            if (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3) {
+                dragging = true;
+                cleanup();
+                __tauricpp__.invoke('window.start_drag', {});
+            }
+        };
+        const cleanup = function() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        const onUp = function() { cleanup(); };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+
+    titlebar.addEventListener('dblclick', function(e) {
+        if (e.target.closest('.window-controls')) return;
+        windowToggleMaximize();
+    });
+
+    // Aero Snap、Win+方向键 也会改变最大化状态，尺寸稳定后回查一次
+    let resizeTimer = null;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(syncMaximizeButton, 120);
+    });
+
+    syncMaximizeButton();
+})();
 
 // ---- File Dialog ----
 async function dialogOpen() {

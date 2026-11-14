@@ -16,9 +16,11 @@ A lightweight C++ desktop application framework powered by WebView2, inspired by
 - **Per-Monitor DPI Awareness (Per-Monitor V2)** — Manifest-declared Per-Monitor V2 DPI awareness, combined with runtime `SetProcessDpiAwarenessContext` fallback and `WM_DPICHANGED` handling. The window and WebView2 are always rendered at physical pixel resolution — no bitmap-stretch blur on 125%/150%/200% scaled displays.
 - **Dark Launch** — Window background color matches frontend theme, eliminating white flash on startup.
 - **Dev/Prod Dual Mode** — Automatically loads from filesystem in development, from embedded resources in production. No code changes required.
+- **Frameless Window & Custom Title Bar** — Set `config.window_config.decorations = false` to hide the system title bar and draw your own in the frontend. Native edge-resize (via `WM_NCHITTEST` with an inset WebView), rounded corners (`DWMWCP_ROUND`), and the DWM drop shadow are preserved; double-clicking the title bar maximizes/restores.
+- **Two Sample Apps** — `sample.exe` (frameless, custom title bar) and `sample_basic.exe` (default system title bar) showcase both decoration modes.
 - **Minimal Dependencies** — Only WebView2 SDK and nlohmann/json. No Chromium bundled, no .NET runtime, no Qt.
 - **Persistent Frontend Storage** — IndexedDB, LocalStorage, and SessionStorage work reliably across app launches. WebView2 user data is stored in a stable temp directory (`%TEMP%/tauricpp_<exe_name>/`) instead of per-PID folders, ensuring frontend-side persistence survives restarts.
-- **C++17** — Modern C++ with clean API design.
+- **C++20** — Modern C++ with clean API design.
 
 ## Quick Start
 
@@ -46,12 +48,13 @@ This will:
 .\build.ps1 -Clean       # Clean build directory and rebuild
 ```
 
-Output: `build\sample.exe`
+Output: `build\sample.exe` (frameless) and `build\sample_basic.exe` (system title bar)
 
 ### Run
 
 ```powershell
-.\build\sample.exe
+.\build\sample.exe        # Frameless, custom title bar
+.\build\sample_basic.exe  # System title bar
 ```
 
 ## Project Structure
@@ -78,7 +81,8 @@ TauriCPP/
 │   ├── dialog.cpp              # IFileDialog implementation
 │   └── clipboard.cpp           # Win32 clipboard implementation
 ├── sample/
-│   ├── src/main.cpp            # Example application
+│   ├── src/main.cpp            # Sample app (frameless, custom title bar)
+│   ├── src/main_basic.cpp      # Sample app (system title bar)
 │   └── frontend/
 │       ├── index.html
 │       ├── css/style.css
@@ -388,6 +392,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## Changelog
+
+### v1.1.0
+
+- **New**: Frameless window mode — set `config.window_config.decorations = false` to hide the system title bar and draw a custom title bar in the frontend. Native edge-resize (via `WM_NCHITTEST` with an inset WebView), rounded corners (`DWMWCP_ROUND`), and the DWM drop shadow are preserved; double-clicking the title bar maximizes/restores.
+- **New**: Two sample apps — `sample.exe` (frameless, custom title bar) and `sample_basic.exe` (default system title bar) demonstrate both decoration modes, sharing one frontend that auto-adapts via a `tauricpp-frameless` marker class injected by the framework.
+- **Improved**: The frameless sample's custom title bar adds double-click-to-maximize and cleaner min/max/close hover states (no inherited blue shadow).
 
 ### v1.0.4
 

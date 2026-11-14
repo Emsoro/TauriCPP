@@ -18,6 +18,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     config.window_config.width = 900;
     config.window_config.height = 750;
     config.window_config.center = true;
+    config.window_config.decorations = false;  // 隐藏系统标题栏，改用前端自绘标题栏
+    config.window_config.bg_color = RGB(244, 248, 251);  // 匹配浅色页面背景，消除启动闪烁
     config.window_config.devtools = true;  // 启用DevTools，F12切换
 
     tauricpp::App app(config);
@@ -138,6 +140,31 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     bridge.RegisterCommand("window.set_title", [&app](const nlohmann::json& args) -> nlohmann::json {
         app.GetWindow().SetTitle(args.value("title", ""));
         return {{"success", true}};
+    });
+
+    // 无边框窗口：前端在自绘标题栏按下鼠标时调用，交还给系统做原生拖动
+    bridge.RegisterCommand("window.start_drag", [&app](const nlohmann::json&) -> nlohmann::json {
+        app.GetWindow().StartDrag();
+        return {{"success", true}};
+    });
+
+    bridge.RegisterCommand("window.close", [&app](const nlohmann::json&) -> nlohmann::json {
+        app.GetWindow().Close();
+        return {{"success", true}};
+    });
+
+    bridge.RegisterCommand("window.is_maximized", [&app](const nlohmann::json&) -> nlohmann::json {
+        return {{"maximized", app.GetWindow().IsMaximized()}};
+    });
+
+    bridge.RegisterCommand("window.toggle_maximize", [&app](const nlohmann::json&) -> nlohmann::json {
+        bool was_maximized = app.GetWindow().IsMaximized();
+        if (was_maximized) {
+            app.GetWindow().Restore();
+        } else {
+            app.GetWindow().Maximize();
+        }
+        return {{"maximized", !was_maximized}};
     });
 
     // open_url 命令 - 用默认浏览器打开URL

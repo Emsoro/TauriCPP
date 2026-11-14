@@ -8,12 +8,41 @@
 #include <shellscalingapi.h>
 #include <versionhelpers.h>
 #include <ole2.h>
+#include <dwmapi.h>
 #include <queue>
 #include <mutex>
+
+// GET_X_LPARAM/GET_Y_LPARAM 原本位于 windowsx.h，但该头文件把 IsMinimized/IsMaximized
+// 定义为宏，会与 Window::IsMinimized()/IsMaximized() 成员函数冲突，因此只取所需宏
+#ifndef GET_X_LPARAM
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#endif
+#ifndef GET_Y_LPARAM
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+#endif
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shcore.lib")   // 用于 GetDpiForMonitor / SetProcessDpiAwarenessContext
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "dwmapi.lib")   // 用于 DwmSetWindowAttribute / DwmExtendFrameIntoClientArea
+
+// 兼容较旧 SDK：DWM 边框颜色属性（Windows 11 build 22000+）
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
+// 兼容较旧 SDK：DWM 圆角偏好属性（Windows 11 build 22000+）
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_DEFAULT
+#define DWMWCP_DEFAULT 0
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
 
 using namespace Microsoft::WRL;
 
@@ -254,6 +283,28 @@ static void ShowWebView2MissingMessage(HWND hwnd) {
 }
 
 // ============================================================================
+// 计算WebView2布局矩形
+// ============================================================================
+RECT Window::GetWebViewBounds() const {
+    RECT bounds;
+    GetClientRect(hwnd_, &bounds);
+    if (!config_.decorations && !IsZoomed(hwnd_)) {
+        // 无边框且无最大化时，四周各内缩一个缩放边框（与 WM_NCHITTEST 命中宽度一致），
+        // 把窗口边缘让给父窗口命中（WM_NCHITTEST 返回 HT*）以实现拖拽缩放；
+        // 内缩后露出的边缘条由窗口背景刷填充（bg_color），与页面背景融为一体。
+        static auto getDpiForWindow = reinterpret_cast<UINT(WINAPI*)(HWND)>(
+            ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+        const UINT dpi = getDpiForWindow ? getDpiForWindow(hwnd_) : 96;
+        const int s = MulDiv(3, dpi, 96);
+        bounds.left += s;
+        bounds.top += s;
+        bounds.right -= s;
+        bounds.bottom -= s;
+    }
+    return bounds;
+}
+
+// ============================================================================
 // 创建Win32原生窗口
 // ============================================================================
 bool Window::CreateNativeWindow() {
@@ -276,6 +327,12 @@ bool Window::CreateNativeWindow() {
     }
 
     DWORD style = WS_OVERLAPPEDWINDOW;
+    if (!config_.decorations) {
+        // 必须用 WS_POPUP：overlapped 类型窗口即使清掉 WS_CAPTION，
+        // CreateWindowEx 仍会隐式补回标题栏。保留缩放边框/最大化/系统菜单，
+        // 以支持原生缩放、Aero Snap、按工作区最大化、任务栏按钮与 DWM 阴影
+        style = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+    }
     if (!config_.resizable) {
         style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     }
@@ -304,10 +361,13 @@ bool Window::CreateNativeWindow() {
     auto adjustForDpi = reinterpret_cast<PAdjustWindowRectExForDpi>(
         ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
     DWORD exStyle = config_.always_on_top ? WS_EX_TOPMOST : 0;
-    if (adjustForDpi) {
-        adjustForDpi(&rect, style, FALSE, exStyle, targetDpi);
-    } else {
-        AdjustWindowRectEx(&rect, style, FALSE, exStyle);
+    // 无边框时 WM_NCCALCSIZE 让客户区==窗口矩形，无需再为非客户区预留尺寸
+    if (config_.decorations) {
+        if (adjustForDpi) {
+            adjustForDpi(&rect, style, FALSE, exStyle, targetDpi);
+        } else {
+            AdjustWindowRectEx(&rect, style, FALSE, exStyle);
+        }
     }
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
@@ -328,6 +388,23 @@ bool Window::CreateNativeWindow() {
         nullptr, nullptr, wc.hInstance, this
     );
 
+    if (hwnd_ && !config_.decorations) {
+        // 无边框：彻底去掉 DWM 合成的 1px 边框细线（DWMWA_COLOR_NONE）。
+        // 缩放完全由 WM_NCHITTEST 提供：GetWebViewBounds 已将 WebView 内缩，
+        // 边缘让给父窗口命中，故去掉边框不会丢失缩放。
+        COLORREF borderColor = DWMWA_COLOR_NONE;
+        if (SUCCEEDED(DwmSetWindowAttribute(hwnd_, DWMWA_BORDER_COLOR, &borderColor, sizeof(borderColor)))) {
+            // 恢复 Win11 圆角（NONE 会连带去掉，需显式恢复）
+            DWORD cornerPref = DWMWCP_ROUND;
+            DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPref, sizeof(cornerPref));
+        } else {
+            // Win10 兜底：将 DWM 边框向客户区扩展 1px，由 WebView 内容覆盖该像素；
+            // 同时保留 DWM 阴影与原生缩放边框行为
+            MARGINS margins = {1, 1, 1, 1};
+            DwmExtendFrameIntoClientArea(hwnd_, &margins);
+        }
+    }
+
     return hwnd_ != nullptr;
 }
 
@@ -346,11 +423,63 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     }
 
     switch (msg) {
+    case WM_GETMINMAXINFO: {
+        // 无边框(WS_POPUP)窗口默认最大化会铺满整屏盖住任务栏，这里约束到工作区
+        if (self && !self->config_.decorations) {
+            LRESULT def = DefWindowProcW(hwnd, msg, wParam, lParam);
+            auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+            MONITORINFO mi = {};
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+                mmi->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
+                mmi->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
+                mmi->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+                mmi->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+            }
+            return def;
+        }
+        break;
+    }
+
+    case WM_NCCALCSIZE: {
+        // 无边框：客户区铺满整个窗口矩形，消除顶部/四周的非客户区细边
+        if (wParam && self && !self->config_.decorations) {
+            return 0;
+        }
+        break;
+    }
+
+    case WM_NCHITTEST: {
+        // 客户区铺满后默认命中测试不再提供缩放边框，这里手动补边缘命中
+        if (self && !self->config_.decorations && !IsZoomed(hwnd)) {
+            static auto getDpiForWindow = reinterpret_cast<UINT(WINAPI*)(HWND)>(
+                ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+            const UINT dpi = getDpiForWindow ? getDpiForWindow(hwnd) : 96;
+            const int b = MulDiv(3, dpi, 96);
+            RECT wr;
+            GetWindowRect(hwnd, &wr);
+            const int x = GET_X_LPARAM(lParam);
+            const int y = GET_Y_LPARAM(lParam);
+            const bool left = x < wr.left + b;
+            const bool right = x >= wr.right - b;
+            const bool top = y < wr.top + b;
+            const bool bottom = y >= wr.bottom - b;
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            return HTCLIENT;
+        }
+        break;
+    }
+
     case WM_SIZE: {
         if (self && self->controller_) {
-            RECT bounds;
-            GetClientRect(hwnd, &bounds);
-            self->controller_->put_Bounds(bounds);
+            self->controller_->put_Bounds(self->GetWebViewBounds());
         }
         if (self && self->on_resize_ && wParam != SIZE_MINIMIZED) {
             RECT clientRect;
@@ -382,9 +511,7 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     SWP_NOZORDER | SWP_NOACTIVATE);
             }
             if (self->controller_) {
-                RECT bounds;
-                GetClientRect(hwnd, &bounds);
-                self->controller_->put_Bounds(bounds);
+                self->controller_->put_Bounds(self->GetWebViewBounds());
             }
             (void)newDpi;
         }
@@ -485,10 +612,8 @@ bool Window::InitWebView() {
                                 webview_->AddRef();
                             }
 
-                            // 设置WebView填满窗口
-                            RECT bounds;
-                            GetClientRect(hwnd_, &bounds);
-                            controller_->put_Bounds(bounds);
+                            // 设置WebView布局（无边框时四周内缩，露出缩放边缘）
+                            controller_->put_Bounds(GetWebViewBounds());
 
                             // ★ 用自定义 IDropTarget 替换 WebView2 子窗口的拖拽处理
                             OleInitialize(nullptr);
@@ -524,9 +649,7 @@ bool Window::InitWebView() {
                                     [this](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
                                         // 导航完成后重新设置bounds确保WebView正确布局
                                         if (controller_) {
-                                            RECT bounds;
-                                            GetClientRect(hwnd_, &bounds);
-                                            controller_->put_Bounds(bounds);
+                                            controller_->put_Bounds(GetWebViewBounds());
                                         }
                                         return S_OK;
                                     }
@@ -791,11 +914,18 @@ void Window::SetupBridge() {
 
     // 在文档创建时注入桥接JS（在页面脚本执行之前）
     ComPtr<ICoreWebView2_5> webview5;
-    if (SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview5)))) {
+    bool hasV5 = SUCCEEDED(webview_->QueryInterface(IID_PPV_ARGS(&webview5)));
+    if (hasV5) {
         std::string bridgeJs = Bridge::GetBridgeJs();
         webview5->AddScriptToExecuteOnDocumentCreated(
             Utf8ToWide(bridgeJs).c_str(), nullptr
         );
+        // 无边框模式：在 <html> 上标记 frameless，前端据此显示自绘标题栏；
+        // 系统标题栏模式下不标记，前端会隐藏自绘标题栏避免双标题栏
+        if (!config_.decorations) {
+            webview5->AddScriptToExecuteOnDocumentCreated(
+                L"document.documentElement.classList.add('tauricpp-frameless');", nullptr);
+        }
     } else {
         // 回退：导航完成后注入桥接JS
         webview_->add_NavigationCompleted(
@@ -807,6 +937,22 @@ void Window::SetupBridge() {
                 }
             ).Get(),
             &event_tokens_.impl->sourceChangedToken  // 复用sourceChangedToken作为回退令牌
+        );
+    }
+
+    // 无边框模式：导航完成后（DOM 已就绪，documentElement 必然存在）在 <html> 上
+    // 标记 frameless，确保自绘标题栏的 CSS 规则生效；文档创建期注入作为无闪烁补充，
+    // 二者互为兜底（文档创建期 documentElement 偶发不可用的情况由这里兜底）。
+    if (!config_.decorations) {
+        webview_->add_NavigationCompleted(
+            Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs*) -> HRESULT {
+                    sender->ExecuteScript(
+                        L"document.documentElement.classList.add('tauricpp-frameless');", nullptr);
+                    return S_OK;
+                }
+            ).Get(),
+            &event_tokens_.impl->navigationCompletedToken
         );
     }
 }
@@ -858,9 +1004,11 @@ void Window::SetTitle(const std::string& title) {
 
 void Window::SetSize(int width, int height) {
     if (!hwnd_) return;
-    DWORD style = GetWindowLongW(hwnd_, GWL_STYLE);
     RECT rect = { 0, 0, width, height };
-    AdjustWindowRect(&rect, style, FALSE);
+    if (config_.decorations) {
+        DWORD style = GetWindowLongW(hwnd_, GWL_STYLE);
+        AdjustWindowRect(&rect, style, FALSE);
+    }
     SetWindowPos(hwnd_, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
                  SWP_NOMOVE | SWP_NOZORDER);
 }
@@ -907,6 +1055,13 @@ void Window::Maximize() {
 
 void Window::Restore() {
     if (hwnd_) ShowWindow(hwnd_, SW_RESTORE);
+}
+
+void Window::StartDrag() {
+    if (!hwnd_) return;
+    // 交给系统进入模态移动循环，拖动行为与原生标题栏一致（含 Aero Snap）
+    ReleaseCapture();
+    SendMessageW(hwnd_, WM_NCLBUTTONDOWN, HTCAPTION, 0);
 }
 
 bool Window::IsMinimized() const {

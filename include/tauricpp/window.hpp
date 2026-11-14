@@ -39,6 +39,7 @@ public:
         bool center = true;
         bool resizable = true;
         bool always_on_top = false;
+        bool decorations = true;        ///< 是否显示系统标题栏；false 时由前端自绘，需配合 StartDrag 拖动
         bool devtools = false;          ///< 是否启用DevTools（F12切换）
         std::string start_url = "https://tauricpp.app/index.html";
         COLORREF bg_color = RGB(15, 12, 41);  ///< 默认背景色（匹配前端渐变起点），消除白屏
@@ -78,6 +79,8 @@ public:
     void Minimize();
     void Maximize();
     void Restore();
+    /// 开始拖动窗口（无边框模式下由前端在标题栏 mousedown 时调用，必须在UI线程）
+    void StartDrag();
     bool IsMinimized() const;
     bool IsMaximized() const;
     bool IsFocused() const;
@@ -107,6 +110,10 @@ private:
 
     /// 设置WebView2默认背景色（消除白屏闪烁）
     void SetWebViewBackgroundColor();
+
+    /// 计算WebView2的布局矩形：无边框时四周各缩进一个缩放边框，
+    /// 把窗口边缘让给父窗口命中（WM_NCHITTEST）以实现拖拽缩放；最大化时不内缩。
+    RECT GetWebViewBounds() const;
 
     /// Win32窗口过程
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);

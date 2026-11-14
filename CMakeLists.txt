@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
-project(TauriCPP VERSION 0.1.0 LANGUAGES CXX)
+project(TauriCPP VERSION 1.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
@@ -159,6 +159,19 @@ target_include_directories(sample PRIVATE "${GEN_DIR}")
 target_link_libraries(sample PRIVATE tauricpp)
 
 add_dependencies(sample pack_resources)
+
+# ---- 第二个示例：系统标题栏（原始标题栏外观）----
+add_executable(sample_basic WIN32
+    sample/src/main_basic.cpp
+    "${RESOURCE_MAP_CPP}"
+    "${RESOURCES_RC}"
+    ${SAMPLE_ADDITIONAL_SOURCES}
+)
+
+target_include_directories(sample_basic PRIVATE "${GEN_DIR}")
+target_link_libraries(sample_basic PRIVATE tauricpp)
+
+add_dependencies(sample_basic pack_resources)
 
 add_custom_target(pack_resources
     DEPENDS "${RESOURCES_RC}" "${RESOURCE_MAP_CPP}"

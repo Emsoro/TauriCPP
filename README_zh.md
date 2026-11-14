@@ -16,9 +16,11 @@
 - **Per-Monitor 高 DPI 感知（Per-Monitor V2）** — 通过嵌入 manifest 声明 Per-Monitor V2 DPI 感知，运行时 `SetProcessDpiAwarenessContext` 兜底，并处理 `WM_DPICHANGED` 事件。窗口与 WebView2 始终按物理像素渲染，在 125%/150%/200% 等缩放比例的屏幕上不会再因位图拉伸而模糊。
 - **深色启动** — 窗口背景色匹配前端主题，启动时无白屏闪烁。
 - **开发/生产双模式** — 开发时自动从文件系统加载，生产时从嵌入资源加载，无需修改代码。
+- **无边框窗口与自绘标题栏** — 设置 `config.window_config.decorations = false` 即可隐藏系统标题栏，由前端自绘标题栏。框架保留原生边缘拖拽缩放（WebView 内缩后通过 `WM_NCHITTEST` 命中边缘）、圆角（`DWMWCP_ROUND`）与 DWM 阴影；双击标题栏可最大化/还原。
+- **两个示例程序** — `sample.exe`（无边框 + 自绘标题栏）与 `sample_basic.exe`（系统默认标题栏）演示两种装饰模式。
 - **极简依赖** — 仅需 WebView2 SDK 和 nlohmann/json，不捆绑 Chromium，不依赖 .NET 运行时，不依赖 Qt。
 - **持久化前端存储** — IndexedDB、LocalStorage、SessionStorage 跨启动可靠工作。WebView2 用户数据存储在稳定的临时目录（`%TEMP%/tauricpp_<exe_name>/`）而非按 PID 创建的目录，确保前端侧持久数据在重启后不丢失。
-- **C++17** — 现代 C++，API 简洁清晰。
+- **C++20** — 现代 C++，API 简洁清晰。
 
 ## 快速开始
 
@@ -46,12 +48,13 @@
 .\build.ps1 -Clean       # 清理构建目录并重新构建
 ```
 
-输出：`build\sample.exe`
+输出：`build\sample.exe`（无边框示例）与 `build\sample_basic.exe`（系统标题栏示例）
 
 ### 运行
 
 ```powershell
-.\build\sample.exe
+.\build\sample.exe        # 无边框 + 自绘标题栏示例
+.\build\sample_basic.exe  # 系统标题栏示例
 ```
 
 ## 项目结构
@@ -78,7 +81,8 @@ TauriCPP/
 │   ├── dialog.cpp              # IFileDialog 实现
 │   └── clipboard.cpp           # Win32 剪贴板实现
 ├── sample/
-│   ├── src/main.cpp            # 示例应用
+│   ├── src/main.cpp            # 示例应用（无边框自绘标题栏）
+│   ├── src/main_basic.cpp      # 示例应用（系统标题栏）
 │   └── frontend/
 │       ├── index.html
 │       ├── css/style.css
@@ -388,6 +392,12 @@ if (vfs.FindFile("/path/to/file.html", fileCopy)) { /* ... */ }
 - Python 3.7+
 
 ## 更新日志
+
+### v1.1.0
+
+- **新增**：无边框窗口模式——设置 `config.window_config.decorations = false` 隐藏系统标题栏、由前端自绘标题栏。框架保留原生边缘拖拽缩放（WebView 内缩后通过 `WM_NCHITTEST` 命中边缘）、圆角（`DWMWCP_ROUND`）与 DWM 阴影；双击标题栏可最大化/还原。
+- **新增**：两个示例程序——`sample.exe`（无边框 + 自绘标题栏）与 `sample_basic.exe`（系统默认标题栏）演示两种装饰模式，共用同一份前端，由框架注入 `tauricpp-frameless` 标记类自动适配。
+- **优化**：无边框示例的自绘标题栏支持双击最大化/还原，并优化了最小化/最大化/关闭按钮的悬停样式（不再继承全局蓝色阴影）。
 
 ### v1.0.4
 
