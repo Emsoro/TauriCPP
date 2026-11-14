@@ -243,6 +243,7 @@ config.window_config.resizable = true;
 config.window_config.always_on_top = false;
 config.window_config.devtools = true;
 config.window_config.bg_color = RGB(15, 12, 41);  // Dark background, no white flash
+config.window_config.decorations = true;          // true = system title bar (default); false = frameless with custom title bar
 config.window_config.start_url = "https://tauricpp.app/index.html";
 config.dev_mode = false;
 
